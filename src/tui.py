@@ -1663,7 +1663,7 @@ class HeptaOktaStrategyScreen(Screen):
                 if hepta_sub_pity >= HEPTA_OKTA_ANVIL_PITY:
                     hepta_sub_progress += 1
                     hepta_sub_pity = 0
-                elif simulator.rng.random() < 0.10:  # 10% success rate
+                elif simulator.rng.random() < 0.06:  # 6% success rate
                     hepta_sub_progress += 1
                     hepta_sub_pity = 0
                 else:
@@ -1690,7 +1690,7 @@ class HeptaOktaStrategyScreen(Screen):
                 if okta_sub_pity >= HEPTA_OKTA_ANVIL_PITY:
                     okta_sub_progress += 1
                     okta_sub_pity = 0
-                elif simulator.rng.random() < 0.10:  # 10% success rate
+                elif simulator.rng.random() < 0.06:  # 6% success rate
                     okta_sub_progress += 1
                     okta_sub_pity = 0
                 else:
