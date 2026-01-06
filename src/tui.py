@@ -4,12 +4,14 @@ from dataclasses import dataclass, field
 from typing import Optional
 
 from textual.app import App, ComposeResult
+from textual.events import Click
 from textual.binding import Binding
 from textual.containers import Container, Horizontal, Vertical, ScrollableContainer
 from textual.screen import Screen
 from textual.widgets import (
     Button,
     Checkbox,
+    Collapsible,
     Footer,
     Header,
     Input,
@@ -144,6 +146,15 @@ class ConfigScreen(Screen):
     .hidden {
         display: none;
     }
+
+    .strategy-buttons {
+        height: auto;
+        margin-top: 1;
+    }
+
+    .strategy-buttons Button {
+        margin-right: 1;
+    }
     """
 
     BINDINGS = [
@@ -165,6 +176,8 @@ class ConfigScreen(Screen):
 
         with ScrollableContainer(id="config-container"):
             yield Static("BDM Awakening Enhancement Simulator", id="title")
+            with Collapsible(title="Enhancement Rates & Anvil Pity", collapsed=True):
+                yield Static(self._build_rates_table(), id="rates-table")
             yield Rule()
 
             # Target and Starting level
@@ -211,12 +224,6 @@ class ConfigScreen(Screen):
                 yield Checkbox("Use Hepta for VII→VIII (5 sub-enhancements, 15 crystals each)", id="use-hepta")
             with Horizontal(classes="config-row"):
                 yield Checkbox("Use Okta for VIII→IX (10 sub-enhancements, 15 crystals each)", id="use-okta")
-
-            yield Rule()
-
-            # Enhancement rates table
-            yield Static("Enhancement Rates & Anvil Pity", classes="section-title")
-            yield Static(self._build_rates_table(), id="rates-table")
 
             yield Rule()
 
@@ -283,67 +290,6 @@ class ConfigScreen(Screen):
 
             yield Rule()
 
-            # Market prices settings
-            yield Static("Market Prices (Silver)", classes="section-title")
-            yield Static("(Set to 0 if not applicable or unknown)")
-
-            with Horizontal(classes="config-row"):
-                yield Label("Crystal price:", classes="config-label")
-                yield Input(
-                    value="34650000",
-                    placeholder="34650000",
-                    id="price-crystal",
-                    classes="config-input-small",
-                    type="integer",
-                )
-                yield Static("silver", classes="price-unit")
-
-            with Horizontal(classes="config-row"):
-                yield Label("200K Restoration Scrolls:", classes="config-label")
-                yield Input(
-                    value="1000000000000",
-                    placeholder="1T",
-                    id="price-restoration",
-                    classes="config-input",
-                    type="integer",
-                )
-                yield Static("silver", classes="price-unit")
-
-            with Horizontal(classes="config-row"):
-                yield Label("Valks +10% price:", classes="config-label")
-                yield Input(
-                    value="0",
-                    placeholder="0",
-                    id="price-valks-10",
-                    classes="config-input-small",
-                    type="integer",
-                )
-                yield Static("silver", classes="price-unit")
-
-            with Horizontal(classes="config-row"):
-                yield Label("Valks +50% price:", classes="config-label")
-                yield Input(
-                    value="0",
-                    placeholder="0",
-                    id="price-valks-50",
-                    classes="config-input-small",
-                    type="integer",
-                )
-                yield Static("silver", classes="price-unit")
-
-            with Horizontal(classes="config-row"):
-                yield Label("Valks +100% price:", classes="config-label")
-                yield Input(
-                    value="0",
-                    placeholder="0",
-                    id="price-valks-100",
-                    classes="config-input-small",
-                    type="integer",
-                )
-                yield Static("silver", classes="price-unit")
-
-            yield Rule()
-
             yield Button("Start Simulation", id="start-button", variant="success")
 
             yield Rule()
@@ -359,8 +305,9 @@ class ConfigScreen(Screen):
                     classes="config-input-small",
                     type="integer",
                 )
-            yield Button("Restoration Strategy (+IV to +VIII)", id="restoration-strategy-button", variant="primary")
-            yield Button("Hepta/Okta Strategy (with +VI restoration)", id="hepta-okta-strategy-button", variant="primary")
+            with Horizontal(classes="strategy-buttons"):
+                yield Button("Restoration Strategy", id="restoration-strategy-button", variant="primary")
+                yield Button("Hepta/Okta Strategy", id="hepta-okta-strategy-button", variant="primary")
 
         yield Footer()
 
@@ -414,16 +361,20 @@ class ConfigScreen(Screen):
     def action_start(self) -> None:
         self._start_simulation()
 
-    def _parse_price(self, input_id: str) -> int:
-        """Parse price from input field, returning 0 on error."""
+    def _get_price(self, price_key: str) -> int:
+        """Get price from app-level market prices."""
+        return self.app.market_prices.get(price_key, 0)
+
+    def _parse_input(self, input_id: str, default: int = 0) -> int:
+        """Parse integer from input field, returning default on error."""
         try:
             input_field = self.query_one(f"#{input_id}", Input)
             value = input_field.value.strip()
             if not value:
-                return 0
+                return default
             return int(value)
         except (ValueError, Exception):
-            return 0
+            return default
 
     def _start_simulation(self) -> None:
         # Collect config values
@@ -441,11 +392,11 @@ class ConfigScreen(Screen):
 
         # Collect market prices
         market_prices = MarketPrices(
-            crystal_price=self._parse_price("price-crystal"),
-            restoration_bundle_price=self._parse_price("price-restoration"),
-            valks_10_price=self._parse_price("price-valks-10"),
-            valks_50_price=self._parse_price("price-valks-50"),
-            valks_100_price=self._parse_price("price-valks-100"),
+            crystal_price=self._get_price("crystal"),
+            restoration_bundle_price=self._get_price("restoration"),
+            valks_10_price=self._get_price("valks_10"),
+            valks_50_price=self._get_price("valks_50"),
+            valks_100_price=self._get_price("valks_100"),
         )
 
         self.config = SimConfig(
@@ -474,17 +425,17 @@ class ConfigScreen(Screen):
         valks_100_select = self.query_one("#valks-100", Select)
 
         # Get number of simulations
-        num_sims = self._parse_price("num-simulations")
+        num_sims = self._parse_input("num-simulations", 1000)
         if num_sims < 100:
             num_sims = 100  # Minimum 100 simulations
 
         # Collect market prices
         market_prices = MarketPrices(
-            crystal_price=self._parse_price("price-crystal"),
-            restoration_bundle_price=self._parse_price("price-restoration"),
-            valks_10_price=self._parse_price("price-valks-10"),
-            valks_50_price=self._parse_price("price-valks-50"),
-            valks_100_price=self._parse_price("price-valks-100"),
+            crystal_price=self._get_price("crystal"),
+            restoration_bundle_price=self._get_price("restoration"),
+            valks_10_price=self._get_price("valks_10"),
+            valks_50_price=self._get_price("valks_50"),
+            valks_100_price=self._get_price("valks_100"),
         )
 
         self.config = SimConfig(
@@ -515,17 +466,17 @@ class ConfigScreen(Screen):
         valks_100_select = self.query_one("#valks-100", Select)
 
         # Get number of simulations
-        num_sims = self._parse_price("num-simulations")
+        num_sims = self._parse_input("num-simulations", 1000)
         if num_sims < 100:
             num_sims = 100  # Minimum 100 simulations
 
         # Collect market prices
         market_prices = MarketPrices(
-            crystal_price=self._parse_price("price-crystal"),
-            restoration_bundle_price=self._parse_price("price-restoration"),
-            valks_10_price=self._parse_price("price-valks-10"),
-            valks_50_price=self._parse_price("price-valks-50"),
-            valks_100_price=self._parse_price("price-valks-100"),
+            crystal_price=self._get_price("crystal"),
+            restoration_bundle_price=self._get_price("restoration"),
+            valks_10_price=self._get_price("valks_10"),
+            valks_50_price=self._get_price("valks_50"),
+            valks_100_price=self._get_price("valks_100"),
         )
 
         self.config = SimConfig(
@@ -1881,6 +1832,8 @@ class BDMEnhancementApp(App):
     """Main TUI application."""
 
     TITLE = "BDM Enhancement Simulator"
+    ALLOW_SELECT = True
+    theme = "monokai"
     CSS = """
     Screen {
         background: $surface;
@@ -1891,8 +1844,27 @@ class BDMEnhancementApp(App):
         Binding("q", "quit", "Quit", show=True),
     ]
 
+    def __init__(self):
+        super().__init__()
+        # Shared market prices state
+        self.market_prices = {
+            "crystal": 34650000,
+            "restoration": 1000000000000,
+            "valks_10": 0,
+            "valks_50": 0,
+            "valks_100": 0,
+        }
+
     def on_mount(self) -> None:
         self.push_screen(ModuleSelectScreen())
+
+    def on_click(self, event: Click) -> None:
+        """Handle right-click to copy selected text to clipboard."""
+        if event.button == 3:  # Right mouse button
+            selected_text = self.screen.get_selected_text()
+            if selected_text:
+                self.copy_to_clipboard(selected_text)
+                self.notify("Copied to clipboard", timeout=1)
 
 
 def main():

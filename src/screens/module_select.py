@@ -4,9 +4,10 @@ from textual.app import ComposeResult
 from textual.binding import Binding
 from textual.containers import Container
 from textual.screen import Screen
-from textual.widgets import Button, Footer, Header, Static
+from textual.widgets import Button, Footer, Header, Static, Rule
 
 from src.core import ItemTypeRegistry, ItemTypeInfo
+from .market_prices import MarketPricesScreen
 
 
 class ModuleButton(Button):
@@ -53,6 +54,10 @@ class ModuleSelectScreen(Screen):
         margin-left: 4;
         margin-bottom: 1;
     }
+
+    #market-prices-button {
+        margin-top: 2;
+    }
     """
 
     BINDINGS = [
@@ -78,12 +83,17 @@ class ModuleSelectScreen(Screen):
                 yield ModuleButton(module_info, i)
                 yield Static(module_info.description, classes="module-description")
 
+            yield Rule()
+            yield Button("Market Prices", id="market-prices-button", variant="default")
+
         yield Footer()
 
     def on_button_pressed(self, event: Button.Pressed) -> None:
         """Handle button press events."""
         if isinstance(event.button, ModuleButton):
             self._select_module(event.button.module_info)
+        elif event.button.id == "market-prices-button":
+            self.app.push_screen(MarketPricesScreen())
 
     def _select_module(self, module_info: ItemTypeInfo) -> None:
         """Handle selection of a module."""
