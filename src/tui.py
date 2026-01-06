@@ -9,6 +9,7 @@ from textual.containers import Container, Horizontal, Vertical, ScrollableContai
 from textual.screen import Screen
 from textual.widgets import (
     Button,
+    Checkbox,
     Footer,
     Header,
     Input,
@@ -41,6 +42,11 @@ from .market_config import (
     RESTORATION_MARKET_BUNDLE_COST,
     RESTORATION_MARKET_BUNDLE_SIZE,
     RESTORATION_PER_ATTEMPT,
+    HEPTA_SUB_ENHANCEMENTS,
+    OKTA_SUB_ENHANCEMENTS,
+    HEPTA_OKTA_ANVIL_PITY,
+    HEPTA_OKTA_CRYSTALS_PER_ATTEMPT,
+    EXQUISITE_BLACK_CRYSTAL_RECIPE,
 )
 
 
@@ -82,6 +88,8 @@ class SimConfig:
     restoration_from: int = 6   # Use restoration from this level (0 = never)
     speed: float = 0.0          # -1 = instant (precalc), 0 = fast (default)
     market_prices: MarketPrices = field(default_factory=MarketPrices)
+    use_hepta: bool = False     # Use Hepta path for VII→VIII (5 sub-enhancements)
+    use_okta: bool = False      # Use Okta path for VIII→IX (10 sub-enhancements)
 
 
 class ConfigScreen(Screen):
@@ -177,6 +185,16 @@ class ConfigScreen(Screen):
                     id="target-level",
                     classes="config-select",
                 )
+
+            yield Rule()
+
+            # Hepta/Okta failsafe enhancement
+            yield Static("Hepta/Okta Failsafe Enhancement", classes="section-title")
+            yield Static("(Alternative paths using Exquisite Black Crystals)")
+            with Horizontal(classes="config-row"):
+                yield Checkbox("Use Hepta for VII→VIII (5 sub-enhancements, 15 crystals each)", id="use-hepta")
+            with Horizontal(classes="config-row"):
+                yield Checkbox("Use Okta for VIII→IX (10 sub-enhancements, 15 crystals each)", id="use-okta")
 
             yield Rule()
 
@@ -324,7 +342,8 @@ class ConfigScreen(Screen):
                     classes="config-input-small",
                     type="integer",
                 )
-            yield Button("Calculate Winning Strategy", id="strategy-button", variant="primary")
+            yield Button("Restoration Strategy (+IV to +VIII)", id="restoration-strategy-button", variant="primary")
+            yield Button("Hepta/Okta Strategy (with +VI restoration)", id="hepta-okta-strategy-button", variant="primary")
 
         yield Footer()
 
@@ -342,8 +361,10 @@ class ConfigScreen(Screen):
     def on_button_pressed(self, event: Button.Pressed) -> None:
         if event.button.id == "start-button":
             self._start_simulation()
-        elif event.button.id == "strategy-button":
-            self._start_strategy_analysis()
+        elif event.button.id == "restoration-strategy-button":
+            self._start_restoration_strategy_analysis()
+        elif event.button.id == "hepta-okta-strategy-button":
+            self._start_hepta_okta_strategy_analysis()
 
     def action_start(self) -> None:
         self._start_simulation()
@@ -367,6 +388,8 @@ class ConfigScreen(Screen):
         valks_100_select = self.query_one("#valks-100", Select)
         restoration_select = self.query_one("#restoration-from", Select)
         speed_select = self.query_one("#speed", Select)
+        use_hepta_checkbox = self.query_one("#use-hepta", Checkbox)
+        use_okta_checkbox = self.query_one("#use-okta", Checkbox)
 
         # Collect market prices
         market_prices = MarketPrices(
@@ -385,12 +408,14 @@ class ConfigScreen(Screen):
             restoration_from=restoration_select.value,
             speed=speed_select.value,
             market_prices=market_prices,
+            use_hepta=use_hepta_checkbox.value,
+            use_okta=use_okta_checkbox.value,
         )
 
         self.app.push_screen(SimulationScreen(self.config))
 
-    def _start_strategy_analysis(self) -> None:
-        # Collect config values (same as _start_simulation but restoration_from will vary)
+    def _start_restoration_strategy_analysis(self) -> None:
+        """Start restoration level strategy analysis (normal enhancement, varying restoration levels)."""
         target_select = self.query_one("#target-level", Select)
         valks_10_select = self.query_one("#valks-10", Select)
         valks_50_select = self.query_one("#valks-50", Select)
@@ -418,9 +443,46 @@ class ConfigScreen(Screen):
             restoration_from=0,  # Will be varied in strategy screen
             speed=0.0,
             market_prices=market_prices,
+            use_hepta=False,  # Normal enhancement only
+            use_okta=False,
         )
 
-        self.app.push_screen(StrategyScreen(self.config, num_sims))
+        self.app.push_screen(RestorationStrategyScreen(self.config, num_sims))
+
+    def _start_hepta_okta_strategy_analysis(self) -> None:
+        """Start Hepta/Okta strategy analysis (with +VI restoration fixed)."""
+        target_select = self.query_one("#target-level", Select)
+        valks_10_select = self.query_one("#valks-10", Select)
+        valks_50_select = self.query_one("#valks-50", Select)
+        valks_100_select = self.query_one("#valks-100", Select)
+
+        # Get number of simulations
+        num_sims = self._parse_price("num-simulations")
+        if num_sims < 100:
+            num_sims = 100  # Minimum 100 simulations
+
+        # Collect market prices
+        market_prices = MarketPrices(
+            crystal_price=self._parse_price("price-crystal"),
+            restoration_bundle_price=self._parse_price("price-restoration"),
+            valks_10_price=self._parse_price("price-valks-10"),
+            valks_50_price=self._parse_price("price-valks-50"),
+            valks_100_price=self._parse_price("price-valks-100"),
+        )
+
+        self.config = SimConfig(
+            target_level=target_select.value,
+            valks_10_from=valks_10_select.value,
+            valks_50_from=valks_50_select.value,
+            valks_100_from=valks_100_select.value,
+            restoration_from=6,  # Fixed at +VI
+            speed=0.0,
+            market_prices=market_prices,
+            use_hepta=False,  # Will be varied in strategy screen
+            use_okta=False,
+        )
+
+        self.app.push_screen(HeptaOktaStrategyScreen(self.config, num_sims))
 
     def action_quit(self) -> None:
         self.app.exit()
@@ -548,6 +610,12 @@ class SimulationScreen(Screen):
         self.total_valks_50 = 0
         self.total_valks_100 = 0
         self.total_silver = 0
+        # Hepta/Okta tracking
+        self.total_exquisite_crystals = 0  # Exquisite Black Crystals used
+        self.hepta_sub_progress = 0  # 0-5 sub-enhancements completed
+        self.okta_sub_progress = 0   # 0-10 sub-enhancements completed
+        self.hepta_sub_pity = 0      # Current pity for active Hepta sub-enhancement
+        self.okta_sub_pity = 0       # Current pity for active Okta sub-enhancement
 
     def compose(self) -> ComposeResult:
         yield Header()
@@ -562,7 +630,7 @@ class SimulationScreen(Screen):
 
         with Container(id="stats-container"):
             with Horizontal(classes="stats-columns"):
-                # Left column: Anvil pity progress for V-X
+                # Left column: Anvil pity progress for V-X and Hepta/Okta
                 with Vertical(classes="stats-column stats-column-left"):
                     yield Static("Anvil Pity (V-X)", classes="section-header")
                     for level in range(5, 11):
@@ -570,6 +638,14 @@ class SimulationScreen(Screen):
                         with Horizontal(classes="stat-row"):
                             yield Static(f"{ROMAN_NUMERALS[level]}:", classes="stat-label")
                             yield Static(f"0/{cap}", id=f"anvil-{level}", classes="stat-value")
+                    # Hepta/Okta sub-enhancement progress
+                    yield Static("Hepta/Okta Progress", classes="section-header", id="hepta-okta-header")
+                    with Horizontal(classes="stat-row"):
+                        yield Static("Hepta (VII→VIII):", classes="stat-label")
+                        yield Static("-", id="hepta-progress", classes="stat-value")
+                    with Horizontal(classes="stat-row"):
+                        yield Static("Okta (VIII→IX):", classes="stat-label")
+                        yield Static("-", id="okta-progress", classes="stat-value")
 
                 # Right column: Resources spent
                 with Vertical(classes="stats-column"):
@@ -577,6 +653,9 @@ class SimulationScreen(Screen):
                     with Horizontal(classes="stat-row"):
                         yield Static("Crystals:", classes="stat-label")
                         yield Static("0", id="stat-crystals", classes="stat-value")
+                    with Horizontal(classes="stat-row"):
+                        yield Static("Exquisite:", classes="stat-label")
+                        yield Static("0", id="stat-exquisite", classes="stat-value")
                     with Horizontal(classes="stat-row"):
                         yield Static("Scrolls:", classes="stat-label")
                         yield Static("0", id="stat-scrolls", classes="stat-value")
@@ -617,16 +696,33 @@ class SimulationScreen(Screen):
             log.write("[bold]Calculating...[/bold]")
             await asyncio.sleep(0.001)  # Allow UI to update
 
-            results = []
+            results = []  # List of (type, data) tuples
             while self.gear.awakening_level < self.config.target_level and self.running:
-                result = self._perform_enhancement()
-                results.append(result)
+                # Check if we should use Hepta/Okta paths
+                if self._should_use_hepta():
+                    result = self._perform_hepta_okta_attempt(is_okta=False)
+                    results.append(("hepta", result))
+                    if self._check_hepta_okta_complete():
+                        results.append(("level_up", {"from": 7, "to": 8, "path": "Hepta"}))
+                elif self._should_use_okta():
+                    result = self._perform_hepta_okta_attempt(is_okta=True)
+                    results.append(("okta", result))
+                    if self._check_hepta_okta_complete():
+                        results.append(("level_up", {"from": 8, "to": 9, "path": "Okta"}))
+                else:
+                    result = self._perform_enhancement()
+                    results.append(("normal", result))
 
             # Now output all results at once
             log.clear()
             log.write("[bold]Enhancement simulation complete![/bold]\n")
-            for result in results:
-                self._log_attempt(log, result)
+            for result_type, result in results:
+                if result_type == "normal":
+                    self._log_attempt(log, result)
+                elif result_type in ("hepta", "okta"):
+                    self._log_hepta_okta_attempt(log, result, result_type == "okta")
+                elif result_type == "level_up":
+                    self._log_hepta_okta_complete(log, result)
 
             self._update_stats()
 
@@ -637,9 +733,25 @@ class SimulationScreen(Screen):
             log.write("[bold]Starting enhancement simulation...[/bold]\n")
 
             while self.gear.awakening_level < self.config.target_level and self.running:
-                result = self._perform_enhancement()
-                self._log_attempt(log, result)
-                self._update_stats()
+                # Check if we should use Hepta/Okta paths
+                if self._should_use_hepta():
+                    result = self._perform_hepta_okta_attempt(is_okta=False)
+                    self._log_hepta_okta_attempt(log, result, is_okta=False)
+                    self._update_stats()
+                    if self._check_hepta_okta_complete():
+                        self._log_hepta_okta_complete(log, {"from": 7, "to": 8, "path": "Hepta"})
+                        self._update_stats()
+                elif self._should_use_okta():
+                    result = self._perform_hepta_okta_attempt(is_okta=True)
+                    self._log_hepta_okta_attempt(log, result, is_okta=True)
+                    self._update_stats()
+                    if self._check_hepta_okta_complete():
+                        self._log_hepta_okta_complete(log, {"from": 8, "to": 9, "path": "Okta"})
+                        self._update_stats()
+                else:
+                    result = self._perform_enhancement()
+                    self._log_attempt(log, result)
+                    self._update_stats()
 
                 # Use minimum 0.001s delay for "fast" mode
                 delay = max(0.001, self.config.speed)
@@ -666,6 +778,131 @@ class SimulationScreen(Screen):
         if self.config.restoration_from == 0:
             return False
         return current_level >= self.config.restoration_from
+
+    def _get_exquisite_crystal_cost(self) -> int:
+        """Calculate the cost of one Exquisite Black Crystal in silver.
+
+        Recipe: 1050 restoration scrolls + 2 valks 100% + 30 pristine crystals
+        """
+        prices = self.config.market_prices
+        scroll_cost = (EXQUISITE_BLACK_CRYSTAL_RECIPE["restoration_scrolls"] *
+                       prices.restoration_bundle_price) // RESTORATION_MARKET_BUNDLE_SIZE
+        valks_cost = EXQUISITE_BLACK_CRYSTAL_RECIPE["valks_100"] * prices.valks_100_price
+        crystal_cost = EXQUISITE_BLACK_CRYSTAL_RECIPE["pristine_black_crystal"] * prices.crystal_price
+        return scroll_cost + valks_cost + crystal_cost
+
+    def _should_use_hepta(self) -> bool:
+        """Check if we should use Hepta path for VII→VIII."""
+        return (self.config.use_hepta and
+                self.gear.awakening_level == 7 and
+                self.hepta_sub_progress < HEPTA_SUB_ENHANCEMENTS)
+
+    def _should_use_okta(self) -> bool:
+        """Check if we should use Okta path for VIII→IX."""
+        return (self.config.use_okta and
+                self.gear.awakening_level == 8 and
+                self.okta_sub_progress < OKTA_SUB_ENHANCEMENTS)
+
+    def _perform_hepta_okta_attempt(self, is_okta: bool) -> dict:
+        """Perform a single Hepta/Okta sub-enhancement attempt.
+
+        Returns dict with: success, anvil_triggered, sub_progress, sub_pity
+        """
+        prices = self.config.market_prices
+        crystals_per_attempt = HEPTA_OKTA_CRYSTALS_PER_ATTEMPT
+        anvil_pity = HEPTA_OKTA_ANVIL_PITY
+
+        # Get current pity
+        current_pity = self.okta_sub_pity if is_okta else self.hepta_sub_pity
+
+        # Cost tracking
+        self.total_exquisite_crystals += crystals_per_attempt
+        exquisite_cost = self._get_exquisite_crystal_cost() * crystals_per_attempt
+        self.total_silver += exquisite_cost
+        self.attempt_count += 1
+        self.target_attempts += 1
+
+        # Check anvil pity
+        anvil_triggered = current_pity >= anvil_pity
+
+        if anvil_triggered:
+            # Guaranteed success on this sub-enhancement
+            if is_okta:
+                self.okta_sub_progress += 1
+                self.okta_sub_pity = 0
+            else:
+                self.hepta_sub_progress += 1
+                self.hepta_sub_pity = 0
+
+            return {
+                "success": True,
+                "anvil_triggered": True,
+                "sub_progress": self.okta_sub_progress if is_okta else self.hepta_sub_progress,
+                "sub_pity": 0,
+            }
+
+        # Roll for success (using same base rate as normal enhancement)
+        # Hepta/Okta doesn't specify success rate - use arbitrary 10% per sub-attempt
+        # This may need adjustment based on actual game mechanics
+        base_rate = 0.10  # 10% per sub-enhancement attempt
+
+        if self.simulator.rng.random() < base_rate:
+            # Success on sub-enhancement
+            if is_okta:
+                self.okta_sub_progress += 1
+                self.okta_sub_pity = 0
+            else:
+                self.hepta_sub_progress += 1
+                self.hepta_sub_pity = 0
+
+            return {
+                "success": True,
+                "anvil_triggered": False,
+                "sub_progress": self.okta_sub_progress if is_okta else self.hepta_sub_progress,
+                "sub_pity": 0,
+            }
+
+        # Failed - increment pity
+        if is_okta:
+            self.okta_sub_pity += 1
+        else:
+            self.hepta_sub_pity += 1
+
+        return {
+            "success": False,
+            "anvil_triggered": False,
+            "sub_progress": self.okta_sub_progress if is_okta else self.hepta_sub_progress,
+            "sub_pity": self.okta_sub_pity if is_okta else self.hepta_sub_pity,
+        }
+
+    def _check_hepta_okta_complete(self) -> bool:
+        """Check if Hepta/Okta is complete and level up if so.
+
+        Returns True if level was increased.
+        """
+        if (self.config.use_hepta and
+            self.gear.awakening_level == 7 and
+            self.hepta_sub_progress >= HEPTA_SUB_ENHANCEMENTS):
+            # Hepta complete - level up to VIII
+            self.gear.awakening_level = 8
+            self.gear.reset_energy(8)
+            self.hepta_sub_progress = 0
+            self.hepta_sub_pity = 0
+            self.target_attempts = 0
+            return True
+
+        if (self.config.use_okta and
+            self.gear.awakening_level == 8 and
+            self.okta_sub_progress >= OKTA_SUB_ENHANCEMENTS):
+            # Okta complete - level up to IX
+            self.gear.awakening_level = 9
+            self.gear.reset_energy(9)
+            self.okta_sub_progress = 0
+            self.okta_sub_pity = 0
+            self.target_attempts = 0
+            return True
+
+        return False
 
     def _perform_enhancement(self) -> AttemptResult:
         """Perform a single enhancement attempt."""
@@ -829,6 +1066,53 @@ class SimulationScreen(Screen):
         # Update anvil pity display
         self._update_anvil_pity()
 
+    def _log_hepta_okta_attempt(self, log: RichLog, result: dict, is_okta: bool) -> None:
+        """Log a Hepta/Okta sub-enhancement attempt."""
+        path_name = "Okta" if is_okta else "Hepta"
+        target = "IX" if is_okta else "VIII"
+        max_subs = OKTA_SUB_ENHANCEMENTS if is_okta else HEPTA_SUB_ENHANCEMENTS
+
+        parts = [f"[cyan]{path_name}[/cyan] ({result['sub_progress']}/{max_subs}): "]
+
+        if result["anvil_triggered"]:
+            parts.append("[yellow bold]ANVIL SUCCESS![/yellow bold]")
+        elif result["success"]:
+            parts.append("[green]SUB SUCCESS[/green]")
+        else:
+            parts.append(f"[red]FAIL[/red] (pity: {result['sub_pity']}/{HEPTA_OKTA_ANVIL_PITY})")
+
+        log.write("".join(parts))
+
+        # Update displays
+        self.query_one("#current-display", Static).update(
+            f"Current: +{ROMAN_NUMERALS[self.gear.awakening_level]}"
+        )
+        self.query_one("#attempts-display", Static).update(
+            f"Attempts: {self.target_attempts}"
+        )
+
+    def _log_hepta_okta_complete(self, log: RichLog, result: dict) -> None:
+        """Log completion of Hepta/Okta enhancement path."""
+        from_level = ROMAN_NUMERALS[result["from"]]
+        to_level = ROMAN_NUMERALS[result["to"]]
+        path = result["path"]
+
+        log.write("")
+        log.write(f"[bold magenta]═══ {path} COMPLETE! {from_level} → {to_level} ═══[/bold magenta]")
+        log.write("")
+
+        # Track max level
+        if self.gear.awakening_level > self.max_level_reached:
+            self.max_level_reached = self.gear.awakening_level
+
+        # Update displays
+        self.query_one("#current-display", Static).update(
+            f"Current: +{ROMAN_NUMERALS[self.gear.awakening_level]}"
+        )
+        self.query_one("#max-display", Static).update(
+            f"Max: +{ROMAN_NUMERALS[self.max_level_reached]}"
+        )
+
     def _update_anvil_pity(self) -> None:
         """Update the anvil pity display for levels V-X."""
         # Update each level's anvil pity display
@@ -859,6 +1143,8 @@ class SimulationScreen(Screen):
         log.write("")
         log.write("[bold]Resources Spent:[/bold]")
         log.write(f"  Crystals: {self.total_crystals}")
+        if self.total_exquisite_crystals > 0:
+            log.write(f"  Exquisite Black Crystals: {self.total_exquisite_crystals}")
         log.write(f"  Restoration Scrolls: {self.total_scrolls:,}")
         if self.total_valks_10 > 0:
             log.write(f"  Valks +10%: {self.total_valks_10}")
@@ -873,8 +1159,22 @@ class SimulationScreen(Screen):
         # Left column: Anvil pity
         self._update_anvil_pity()
 
+        # Hepta/Okta progress
+        if self.config.use_hepta:
+            hepta_text = f"{self.hepta_sub_progress}/{HEPTA_SUB_ENHANCEMENTS} ({self.hepta_sub_pity}/{HEPTA_OKTA_ANVIL_PITY})"
+        else:
+            hepta_text = "-"
+        self.query_one("#hepta-progress", Static).update(hepta_text)
+
+        if self.config.use_okta:
+            okta_text = f"{self.okta_sub_progress}/{OKTA_SUB_ENHANCEMENTS} ({self.okta_sub_pity}/{HEPTA_OKTA_ANVIL_PITY})"
+        else:
+            okta_text = "-"
+        self.query_one("#okta-progress", Static).update(okta_text)
+
         # Right column: Resources
         self.query_one("#stat-crystals", Static).update(str(self.total_crystals))
+        self.query_one("#stat-exquisite", Static).update(str(self.total_exquisite_crystals))
         self.query_one("#stat-scrolls", Static).update(f"{self.total_scrolls:,}")
         self.query_one("#stat-valks-10", Static).update(str(self.total_valks_10))
         self.query_one("#stat-valks-50", Static).update(str(self.total_valks_50))
@@ -907,6 +1207,12 @@ class SimulationScreen(Screen):
         self.total_valks_50 = 0
         self.total_valks_100 = 0
         self.total_silver = 0
+        # Hepta/Okta tracking
+        self.total_exquisite_crystals = 0
+        self.hepta_sub_progress = 0
+        self.okta_sub_progress = 0
+        self.hepta_sub_pity = 0
+        self.okta_sub_pity = 0
 
         # Clear log
         log = self.query_one("#log-container", RichLog)
@@ -926,11 +1232,11 @@ class SimulationScreen(Screen):
         self.app.exit()
 
 
-class StrategyScreen(Screen):
-    """Screen for Monte Carlo strategy analysis."""
+class HeptaOktaStrategyScreen(Screen):
+    """Screen for Monte Carlo Hepta/Okta strategy analysis."""
 
     CSS = """
-    StrategyScreen {
+    HeptaOktaStrategyScreen {
         layout: vertical;
     }
 
@@ -1002,11 +1308,377 @@ class StrategyScreen(Screen):
         asyncio.create_task(self._run_analysis())
 
     async def _run_analysis(self) -> None:
-        """Run Monte Carlo analysis for different restoration strategies."""
+        """Run Monte Carlo analysis for different Hepta/Okta strategies."""
         log = self.query_one("#results-container", RichLog)
         status = self.query_one("#status", Static)
 
         log.write("[bold]Monte Carlo Strategy Analysis[/bold]")
+        log.write(f"Target: +{ROMAN_NUMERALS[self.config.target_level]}, Simulations: {self.num_simulations}")
+        log.write("Restoration: from +VI (fixed)\n")
+
+        # Test 4 Hepta/Okta combinations with restoration from VI
+        # Format: (use_hepta, use_okta, label)
+        strategies = [
+            (True, True, "Hepta+Okta"),
+            (True, False, "Hepta only"),
+            (False, True, "Okta only"),
+            (False, False, "Normal"),
+        ]
+        results = {}
+
+        await self._redraw_table(log, results, strategies)
+        await asyncio.sleep(0.01)
+
+        # Run simulations for each strategy
+        batch_size = max(10, self.num_simulations // 20)  # Update every 5%
+
+        for use_hepta, use_okta, label in strategies:
+            if not self.running:
+                break
+
+            status.update(f"Status: Testing {label}...")
+            strategy_key = (use_hepta, use_okta)
+
+            sim_results = []  # List of (crystals, scrolls, silver, exquisite)
+            for i in range(self.num_simulations):
+                result = self._run_single_simulation(
+                    restoration_from=6,  # Fixed at +VI
+                    use_hepta=use_hepta,
+                    use_okta=use_okta
+                )
+                sim_results.append(result)
+
+                # Update progress periodically
+                if (i + 1) % batch_size == 0 or i == self.num_simulations - 1:
+                    progress = int((i + 1) / self.num_simulations * 100)
+
+                    # Sort by silver for percentiles
+                    sorted_by_silver = sorted(sim_results, key=lambda x: x[2])
+                    p50_idx = len(sorted_by_silver) // 2
+                    p90_idx = int(len(sorted_by_silver) * 0.9)
+
+                    results[strategy_key] = {
+                        "p50": sorted_by_silver[p50_idx],
+                        "p90": sorted_by_silver[p90_idx],
+                        "worst": sorted_by_silver[-1],
+                        "label": label,
+                        "progress": progress,
+                    }
+
+                    # Redraw table
+                    await self._redraw_table(log, results, strategies)
+                    await asyncio.sleep(0.001)
+
+        # Final redraw with best highlighted
+        if results:
+            await self._redraw_table(log, results, strategies, final=True)
+
+        status.update("Status: Complete!")
+        self.running = False
+
+    async def _redraw_table(self, log: RichLog, results: dict, strategies: list, final: bool = False) -> None:
+        """Redraw the results table."""
+        log.clear()
+        log.write("[bold]Monte Carlo Strategy Analysis[/bold]")
+        log.write(f"Target: +{ROMAN_NUMERALS[self.config.target_level]}, Simulations: {self.num_simulations}")
+        log.write("Restoration: from +VI (fixed)\n")
+
+        # Header
+        log.write(f"{'Strategy':<12} {'Prog.':>6} {'Crystals':>10} {'Exquisite':>10} {'Scrolls':>10} {'Silver':>12}")
+        log.write("-" * 64)
+
+        # Find best strategy if final
+        best_strategy = None
+        if final and results:
+            best_strategy = min(results.keys(), key=lambda k: results[k]["p50"][2])  # Sort by silver
+
+        # Sort by p50 silver if final, otherwise keep original order
+        if final:
+            display_order = sorted(results.keys(), key=lambda k: results[k]["p50"][2])
+        else:
+            display_order = [(h, o) for h, o, _ in strategies]
+
+        for strategy_key in display_order:
+            if strategy_key in results:
+                r = results[strategy_key]
+                label = r["label"]
+                progress = f"{r['progress']}%"
+
+                # P50 row (crystals, scrolls, silver, exquisite)
+                p50_crystals, p50_scrolls, p50_silver, p50_exquisite = r["p50"]
+                if final and strategy_key == best_strategy:
+                    log.write(f"[green bold]{label:<12} {progress:>6} {p50_crystals:>10} {p50_exquisite:>10} {p50_scrolls:>10} {self._format_silver(p50_silver):>12} ★ P50[/green bold]")
+                else:
+                    log.write(f"{label:<12} {progress:>6} {p50_crystals:>10} {p50_exquisite:>10} {p50_scrolls:>10} {self._format_silver(p50_silver):>12}    P50")
+
+                # P90 row
+                p90_crystals, p90_scrolls, p90_silver, p90_exquisite = r["p90"]
+                log.write(f"{'':12} {'':>6} {p90_crystals:>10} {p90_exquisite:>10} {p90_scrolls:>10} {self._format_silver(p90_silver):>12}    P90")
+
+                # Worst row
+                worst_crystals, worst_scrolls, worst_silver, worst_exquisite = r["worst"]
+                log.write(f"{'':12} {'':>6} {worst_crystals:>10} {worst_exquisite:>10} {worst_scrolls:>10} {self._format_silver(worst_silver):>12}    Worst")
+                log.write("")
+            else:
+                use_hepta, use_okta = strategy_key
+                label = next((l for h, o, l in strategies if h == use_hepta and o == use_okta), "Unknown")
+                log.write(f"{label:<12} {'wait':>6} {'-':>10} {'-':>10} {'-':>10} {'-':>12}")
+
+        log.write("-" * 64)
+
+        if final and best_strategy is not None:
+            best_label = results[best_strategy]["label"]
+            best_p50_silver = self._format_silver(results[best_strategy]["p50"][2])
+            log.write(f"\n[bold green]★ Recommended: {best_label} (P50 Silver: {best_p50_silver})[/bold green]")
+
+    def _get_exquisite_crystal_cost(self) -> int:
+        """Calculate the cost of one Exquisite Black Crystal in silver."""
+        prices = self.config.market_prices
+        scroll_cost = (EXQUISITE_BLACK_CRYSTAL_RECIPE["restoration_scrolls"] *
+                       prices.restoration_bundle_price) // RESTORATION_MARKET_BUNDLE_SIZE
+        valks_cost = EXQUISITE_BLACK_CRYSTAL_RECIPE["valks_100"] * prices.valks_100_price
+        crystal_cost = EXQUISITE_BLACK_CRYSTAL_RECIPE["pristine_black_crystal"] * prices.crystal_price
+        return scroll_cost + valks_cost + crystal_cost
+
+    def _run_single_simulation(self, restoration_from: int, use_hepta: bool = False, use_okta: bool = False) -> tuple[int, int, int, int]:
+        """Run a single simulation and return (crystals, scrolls, silver, exquisite)."""
+        simulator = AwakeningSimulator()
+        gear = GearState()
+        prices = self.config.market_prices
+        total_crystals = 0
+        total_scrolls = 0
+        total_silver = 0
+        total_exquisite = 0
+
+        # Hepta/Okta state
+        hepta_sub_progress = 0
+        okta_sub_progress = 0
+        hepta_sub_pity = 0
+        okta_sub_pity = 0
+
+        while gear.awakening_level < self.config.target_level:
+            # Check if we should use Hepta path
+            if (use_hepta and
+                gear.awakening_level == 7 and
+                hepta_sub_progress < HEPTA_SUB_ENHANCEMENTS):
+                # Hepta sub-enhancement attempt
+                total_exquisite += HEPTA_OKTA_CRYSTALS_PER_ATTEMPT
+                total_silver += self._get_exquisite_crystal_cost() * HEPTA_OKTA_CRYSTALS_PER_ATTEMPT
+
+                # Check pity
+                if hepta_sub_pity >= HEPTA_OKTA_ANVIL_PITY:
+                    hepta_sub_progress += 1
+                    hepta_sub_pity = 0
+                elif simulator.rng.random() < 0.10:  # 10% success rate
+                    hepta_sub_progress += 1
+                    hepta_sub_pity = 0
+                else:
+                    hepta_sub_pity += 1
+
+                # Check if Hepta complete
+                if hepta_sub_progress >= HEPTA_SUB_ENHANCEMENTS:
+                    gear.awakening_level = 8
+                    gear.reset_energy(8)
+                    hepta_sub_progress = 0
+                    hepta_sub_pity = 0
+                continue
+
+            # Check if we should use Okta path
+            if (use_okta and
+                gear.awakening_level == 8 and
+                okta_sub_progress < OKTA_SUB_ENHANCEMENTS):
+                # Okta sub-enhancement attempt
+                total_exquisite += HEPTA_OKTA_CRYSTALS_PER_ATTEMPT
+                total_silver += self._get_exquisite_crystal_cost() * HEPTA_OKTA_CRYSTALS_PER_ATTEMPT
+
+                # Check pity
+                if okta_sub_pity >= HEPTA_OKTA_ANVIL_PITY:
+                    okta_sub_progress += 1
+                    okta_sub_pity = 0
+                elif simulator.rng.random() < 0.10:  # 10% success rate
+                    okta_sub_progress += 1
+                    okta_sub_pity = 0
+                else:
+                    okta_sub_pity += 1
+
+                # Check if Okta complete
+                if okta_sub_progress >= OKTA_SUB_ENHANCEMENTS:
+                    gear.awakening_level = 9
+                    gear.reset_energy(9)
+                    okta_sub_progress = 0
+                    okta_sub_pity = 0
+                continue
+
+            # Normal enhancement
+            target_level = gear.awakening_level + 1
+
+            # Determine valks
+            valks_type = None
+            if self.config.valks_100_from > 0 and target_level >= self.config.valks_100_from:
+                valks_type = "100"
+            elif self.config.valks_50_from > 0 and target_level >= self.config.valks_50_from:
+                valks_type = "50"
+            elif self.config.valks_10_from > 0 and target_level >= self.config.valks_10_from:
+                valks_type = "10"
+
+            # Crystal cost
+            total_crystals += 1
+            total_silver += prices.crystal_price
+
+            # Valks cost
+            if valks_type == "10":
+                total_silver += prices.valks_10_price
+            elif valks_type == "50":
+                total_silver += prices.valks_50_price
+            elif valks_type == "100":
+                total_silver += prices.valks_100_price
+
+            # Get success rate
+            base_rate = AWAKENING_ENHANCEMENT_RATES.get(target_level, 0.01)
+            if valks_type == "10":
+                base_rate = min(1.0, base_rate * VALKS_MULTIPLIER_10)
+            elif valks_type == "50":
+                base_rate = min(1.0, base_rate * VALKS_MULTIPLIER_50)
+            elif valks_type == "100":
+                base_rate = min(1.0, base_rate * VALKS_MULTIPLIER_100)
+
+            # Check anvil pity
+            current_energy = gear.get_energy(target_level)
+            max_energy = ANVIL_THRESHOLDS_AWAKENING.get(target_level, 999)
+            anvil_triggered = current_energy >= max_energy and max_energy > 0
+
+            if anvil_triggered:
+                gear.awakening_level = target_level
+                gear.reset_energy(target_level)
+                continue
+
+            # Roll for success
+            if simulator.rng.random() < base_rate:
+                gear.awakening_level = target_level
+                gear.reset_energy(target_level)
+            else:
+                # Failed
+                gear.add_energy(target_level)
+
+                if gear.awakening_level > 0:
+                    use_restoration = restoration_from > 0 and gear.awakening_level >= restoration_from
+
+                    if use_restoration:
+                        total_scrolls += RESTORATION_PER_ATTEMPT
+                        total_silver += prices.restoration_attempt_cost
+                        if simulator.rng.random() >= 0.5:  # Restoration failed
+                            gear.awakening_level -= 1
+                    else:
+                        gear.awakening_level -= 1
+
+        return (total_crystals, total_scrolls, total_silver, total_exquisite)
+
+    def _format_silver(self, silver: int) -> str:
+        """Format silver amount with K/M/B/T suffix."""
+        if silver >= 1_000_000_000_000:
+            return f"{silver / 1_000_000_000_000:.1f}T"
+        if silver >= 1_000_000_000:
+            return f"{silver / 1_000_000_000:.1f}B"
+        if silver >= 1_000_000:
+            return f"{silver / 1_000_000:.1f}M"
+        if silver >= 1_000:
+            return f"{silver / 1_000:.1f}K"
+        return str(silver)
+
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        if event.button.id == "back-button":
+            self.action_back()
+
+    def action_back(self) -> None:
+        self.running = False
+        self.app.pop_screen()
+
+    def action_quit(self) -> None:
+        self.running = False
+        self.app.exit()
+
+
+class RestorationStrategyScreen(Screen):
+    """Screen for Monte Carlo restoration level strategy analysis."""
+
+    CSS = """
+    RestorationStrategyScreen {
+        layout: vertical;
+    }
+
+    #strategy-header {
+        height: 3;
+        padding: 0 1;
+        background: $surface;
+        border-bottom: solid $primary;
+    }
+
+    #strategy-status {
+        height: 3;
+        padding: 0 1;
+        background: $surface-darken-1;
+    }
+
+    #results-container {
+        height: 1fr;
+        padding: 1;
+        overflow-y: auto;
+    }
+
+    .results-table {
+        width: 100%;
+    }
+
+    .best-strategy {
+        background: $success-darken-2;
+    }
+
+    #strategy-controls {
+        height: 3;
+        padding: 0 1;
+        background: $surface;
+    }
+    """
+
+    BINDINGS = [
+        Binding("q", "quit", "Quit"),
+        Binding("escape", "back", "Back to Config"),
+    ]
+
+    def __init__(self, config: SimConfig, num_simulations: int = 1000):
+        super().__init__()
+        self.config = config
+        self.num_simulations = num_simulations
+        self.running = False
+        self.results = {}
+
+    def compose(self) -> ComposeResult:
+        yield Header()
+
+        with Horizontal(id="strategy-header"):
+            yield Static(f"Restoration Strategy Analysis for Target: +{ROMAN_NUMERALS[self.config.target_level]}", id="strategy-title")
+
+        with Horizontal(id="strategy-status"):
+            yield Static("Status: Ready", id="status")
+
+        yield RichLog(id="results-container", highlight=True, markup=True)
+
+        with Horizontal(id="strategy-controls"):
+            yield Button("Back", id="back-button", variant="default")
+
+        yield Footer()
+
+    async def on_mount(self) -> None:
+        """Start the analysis when screen is mounted."""
+        self.running = True
+        asyncio.create_task(self._run_analysis())
+
+    async def _run_analysis(self) -> None:
+        """Run Monte Carlo analysis for different restoration strategies."""
+        log = self.query_one("#results-container", RichLog)
+        status = self.query_one("#status", Static)
+
+        log.write("[bold]Monte Carlo Restoration Strategy Analysis[/bold]")
         log.write(f"Target: +{ROMAN_NUMERALS[self.config.target_level]}, Simulations: {self.num_simulations}\n")
 
         # Test restoration starting from IV(4), V(5), VI(6), VII(7), VIII(8) up to target-1
@@ -1024,7 +1696,7 @@ class StrategyScreen(Screen):
                 break
 
             rest_label = f"+{ROMAN_NUMERALS[rest_from]}"
-            status.update(f"Status: Testing {rest_label}...")
+            status.update(f"Status: Testing restoration from {rest_label}...")
 
             sim_results = []  # List of (crystals, scrolls, silver)
             for i in range(self.num_simulations):
@@ -1062,7 +1734,7 @@ class StrategyScreen(Screen):
     async def _redraw_table(self, log: RichLog, results: dict, restoration_options: list, final: bool = False) -> None:
         """Redraw the results table."""
         log.clear()
-        log.write("[bold]Monte Carlo Strategy Analysis[/bold]")
+        log.write("[bold]Monte Carlo Restoration Strategy Analysis[/bold]")
         log.write(f"Target: +{ROMAN_NUMERALS[self.config.target_level]}, Simulations: {self.num_simulations}\n")
 
         # Header

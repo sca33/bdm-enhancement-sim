@@ -59,6 +59,21 @@ CRAFTING_RECIPES: dict[str, dict[str, int]] = {
     },
 }
 
+# Hepta/Okta failsafe enhancement system
+# Alternative paths for VII→VIII (Hepta) and VIII→IX (Okta)
+HEPTA_SUB_ENHANCEMENTS: int = 5   # VII→VIII via 5 sub-enhancements
+OKTA_SUB_ENHANCEMENTS: int = 10   # VIII→IX via 10 sub-enhancements
+HEPTA_OKTA_ANVIL_PITY: int = 17   # 17 failures = guaranteed success per sub-enhancement
+HEPTA_OKTA_CRYSTALS_PER_ATTEMPT: int = 15  # Exquisite Black Crystals per attempt
+
+# Exquisite Black Crystal crafting recipe
+# Used for Hepta/Okta enhancement paths
+EXQUISITE_BLACK_CRYSTAL_RECIPE: dict[str, int] = {
+    "restoration_scrolls": 1050,
+    "valks_100": 2,
+    "pristine_black_crystal": 30,
+}
+
 
 def calculate_crafting_cost(item: str) -> int:
     """Calculate the cost to craft an item from base materials."""
