@@ -19,14 +19,8 @@ from textual.widgets import (
     RichLog,
     Rule,
 )
-from textual.message import Message
-from rich.text import Text
-
 from .simulator import (
     AwakeningSimulator,
-    EnhancementStrategy,
-    RestorationStrategy,
-    ValksStrategy,
     GearState,
     AttemptResult,
 )
@@ -38,8 +32,6 @@ from .config import (
     VALKS_MULTIPLIER_100,
 )
 from .market_config import (
-    MARKET_PRICES,
-    RESTORATION_MARKET_BUNDLE_COST,
     RESTORATION_MARKET_BUNDLE_SIZE,
     RESTORATION_PER_ATTEMPT,
     HEPTA_SUB_ENHANCEMENTS,
@@ -48,34 +40,18 @@ from .market_config import (
     HEPTA_OKTA_CRYSTALS_PER_ATTEMPT,
     EXQUISITE_BLACK_CRYSTAL_RECIPE,
 )
+from .simulation_engine import (
+    EnhancementEngine,
+    SimulationConfig as EngineConfig,
+    MarketPrices,
+)
+from .utils import format_silver, format_time
 
 
 ROMAN_NUMERALS = {
     0: "0", 1: "I", 2: "II", 3: "III", 4: "IV",
     5: "V", 6: "VI", 7: "VII", 8: "VIII", 9: "IX", 10: "X"
 }
-
-
-@dataclass
-class MarketPrices:
-    """Custom market prices for simulation."""
-    crystal_price: int = 34_650_000           # Price per pristine black crystal (77 * 450K)
-    restoration_bundle_price: int = 1_000_000_000_000  # Price for 200K scrolls (1T default)
-    valks_10_price: int = 0                   # Price per +10% valks
-    valks_50_price: int = 0                   # Price per +50% valks
-    valks_100_price: int = 0                  # Price per +100% valks
-
-    @property
-    def restoration_attempt_cost(self) -> int:
-        """Cost per restoration attempt (200 scrolls).
-
-        200K scrolls = 1T silver (default)
-        200 scrolls per attempt = 1B silver per attempt
-        """
-        if self.restoration_bundle_price == 0:
-            return 0
-        # (scrolls_per_attempt / scrolls_per_bundle) * bundle_price
-        return (RESTORATION_PER_ATTEMPT * self.restoration_bundle_price) // RESTORATION_MARKET_BUNDLE_SIZE
 
 
 @dataclass
@@ -1223,26 +1199,12 @@ class SimulationScreen(Screen):
             self.query_one(f"#anvil-{level}", Static).update(f"{current_energy}/{cap}")
 
     def _format_silver(self, silver: int) -> str:
-        """Format silver amount with K/M/B suffix."""
-        if silver >= 1_000_000_000:
-            return f"{silver / 1_000_000_000:.1f}B"
-        if silver >= 1_000_000:
-            return f"{silver / 1_000_000:.1f}M"
-        if silver >= 1_000:
-            return f"{silver / 1_000:.1f}K"
-        return str(silver)
+        """Format silver amount with K/M/B/T suffix."""
+        return format_silver(silver)
 
     def _format_time(self, seconds: int) -> str:
         """Format seconds into human-readable time (hours/minutes/seconds)."""
-        if seconds >= 3600:
-            hours = seconds // 3600
-            minutes = (seconds % 3600) // 60
-            return f"{hours}h {minutes}m"
-        if seconds >= 60:
-            minutes = seconds // 60
-            secs = seconds % 60
-            return f"{minutes}m {secs}s"
-        return f"{seconds}s"
+        return format_time(seconds)
 
     def _log_completion(self, log: RichLog) -> None:
         """Log completion message."""
@@ -1634,151 +1596,36 @@ class HeptaOktaStrategyScreen(Screen):
 
     def _run_single_simulation(self, restoration_from: int, use_hepta: bool = False, use_okta: bool = False) -> tuple[int, int, int, int]:
         """Run a single simulation and return (crystals, scrolls, silver, exquisite)."""
-        simulator = AwakeningSimulator()
-        # Initialize from config starting values
-        gear = GearState(awakening_level=self.config.start_level)
+        # Create engine config from screen config
         prices = self.config.market_prices
-        total_crystals = 0
-        total_scrolls = 0
-        total_silver = 0
-        total_exquisite = 0
+        engine_prices = MarketPrices(
+            crystal_price=prices.crystal_price,
+            restoration_bundle_price=prices.restoration_bundle_price,
+            valks_10_price=prices.valks_10_price,
+            valks_50_price=prices.valks_50_price,
+            valks_100_price=prices.valks_100_price,
+        )
+        engine_config = EngineConfig(
+            start_level=self.config.start_level,
+            target_level=self.config.target_level,
+            restoration_from=restoration_from,
+            use_hepta=use_hepta,
+            use_okta=use_okta,
+            start_hepta=self.config.start_hepta,
+            start_okta=self.config.start_okta,
+            valks_10_from=self.config.valks_10_from,
+            valks_50_from=self.config.valks_50_from,
+            valks_100_from=self.config.valks_100_from,
+            prices=engine_prices,
+        )
 
-        # Hepta/Okta state - initialize from config
-        hepta_sub_progress = self.config.start_hepta
-        okta_sub_progress = self.config.start_okta
-        hepta_sub_pity = 0
-        okta_sub_pity = 0
-
-        while gear.awakening_level < self.config.target_level:
-            # Check if we should use Hepta path
-            # Use Hepta if enabled OR if there's existing progress to complete
-            if ((use_hepta or hepta_sub_progress > 0) and
-                gear.awakening_level == 7 and
-                hepta_sub_progress < HEPTA_SUB_ENHANCEMENTS):
-                # Hepta sub-enhancement attempt
-                total_exquisite += HEPTA_OKTA_CRYSTALS_PER_ATTEMPT
-                total_silver += self._get_exquisite_crystal_cost() * HEPTA_OKTA_CRYSTALS_PER_ATTEMPT
-
-                # Check pity
-                if hepta_sub_pity >= HEPTA_OKTA_ANVIL_PITY:
-                    hepta_sub_progress += 1
-                    hepta_sub_pity = 0
-                elif simulator.rng.random() < 0.06:  # 6% success rate
-                    hepta_sub_progress += 1
-                    hepta_sub_pity = 0
-                else:
-                    hepta_sub_pity += 1
-
-                # Check if Hepta complete
-                if hepta_sub_progress >= HEPTA_SUB_ENHANCEMENTS:
-                    gear.awakening_level = 8
-                    gear.reset_energy(8)
-                    hepta_sub_progress = 0
-                    hepta_sub_pity = 0
-                continue
-
-            # Check if we should use Okta path
-            # Use Okta if enabled OR if there's existing progress to complete
-            if ((use_okta or okta_sub_progress > 0) and
-                gear.awakening_level == 8 and
-                okta_sub_progress < OKTA_SUB_ENHANCEMENTS):
-                # Okta sub-enhancement attempt
-                total_exquisite += HEPTA_OKTA_CRYSTALS_PER_ATTEMPT
-                total_silver += self._get_exquisite_crystal_cost() * HEPTA_OKTA_CRYSTALS_PER_ATTEMPT
-
-                # Check pity
-                if okta_sub_pity >= HEPTA_OKTA_ANVIL_PITY:
-                    okta_sub_progress += 1
-                    okta_sub_pity = 0
-                elif simulator.rng.random() < 0.06:  # 6% success rate
-                    okta_sub_progress += 1
-                    okta_sub_pity = 0
-                else:
-                    okta_sub_pity += 1
-
-                # Check if Okta complete
-                if okta_sub_progress >= OKTA_SUB_ENHANCEMENTS:
-                    gear.awakening_level = 9
-                    gear.reset_energy(9)
-                    okta_sub_progress = 0
-                    okta_sub_pity = 0
-                continue
-
-            # Normal enhancement
-            target_level = gear.awakening_level + 1
-
-            # Determine valks
-            valks_type = None
-            if self.config.valks_100_from > 0 and target_level >= self.config.valks_100_from:
-                valks_type = "100"
-            elif self.config.valks_50_from > 0 and target_level >= self.config.valks_50_from:
-                valks_type = "50"
-            elif self.config.valks_10_from > 0 and target_level >= self.config.valks_10_from:
-                valks_type = "10"
-
-            # Crystal cost
-            total_crystals += 1
-            total_silver += prices.crystal_price
-
-            # Valks cost
-            if valks_type == "10":
-                total_silver += prices.valks_10_price
-            elif valks_type == "50":
-                total_silver += prices.valks_50_price
-            elif valks_type == "100":
-                total_silver += prices.valks_100_price
-
-            # Get success rate
-            base_rate = AWAKENING_ENHANCEMENT_RATES.get(target_level, 0.01)
-            if valks_type == "10":
-                base_rate = min(1.0, base_rate * VALKS_MULTIPLIER_10)
-            elif valks_type == "50":
-                base_rate = min(1.0, base_rate * VALKS_MULTIPLIER_50)
-            elif valks_type == "100":
-                base_rate = min(1.0, base_rate * VALKS_MULTIPLIER_100)
-
-            # Check anvil pity
-            current_energy = gear.get_energy(target_level)
-            max_energy = ANVIL_THRESHOLDS_AWAKENING.get(target_level, 999)
-            anvil_triggered = current_energy >= max_energy and max_energy > 0
-
-            if anvil_triggered:
-                gear.awakening_level = target_level
-                gear.reset_energy(target_level)
-                continue
-
-            # Roll for success
-            if simulator.rng.random() < base_rate:
-                gear.awakening_level = target_level
-                gear.reset_energy(target_level)
-            else:
-                # Failed
-                gear.add_energy(target_level)
-
-                if gear.awakening_level > 0:
-                    use_restoration = restoration_from > 0 and gear.awakening_level >= restoration_from
-
-                    if use_restoration:
-                        total_scrolls += RESTORATION_PER_ATTEMPT
-                        total_silver += prices.restoration_attempt_cost
-                        if simulator.rng.random() >= 0.5:  # Restoration failed
-                            gear.awakening_level -= 1
-                    else:
-                        gear.awakening_level -= 1
-
-        return (total_crystals, total_scrolls, total_silver, total_exquisite)
+        engine = EnhancementEngine(engine_config)
+        result = engine.run_full_simulation()
+        return (result.crystals, result.scrolls, result.silver, result.exquisite_crystals)
 
     def _format_silver(self, silver: int) -> str:
         """Format silver amount with K/M/B/T suffix."""
-        if silver >= 1_000_000_000_000:
-            return f"{silver / 1_000_000_000_000:.1f}T"
-        if silver >= 1_000_000_000:
-            return f"{silver / 1_000_000_000:.1f}B"
-        if silver >= 1_000_000:
-            return f"{silver / 1_000_000:.1f}M"
-        if silver >= 1_000:
-            return f"{silver / 1_000:.1f}K"
-        return str(silver)
+        return format_silver(silver)
 
     def on_button_pressed(self, event: Button.Pressed) -> None:
         if event.button.id == "back-button":
@@ -1981,89 +1828,32 @@ class RestorationStrategyScreen(Screen):
 
     def _run_single_simulation(self, restoration_from: int) -> tuple[int, int, int]:
         """Run a single simulation and return (crystals, scrolls, silver)."""
-        simulator = AwakeningSimulator()
-        # Initialize from config starting value
-        gear = GearState(awakening_level=self.config.start_level)
         prices = self.config.market_prices
-        total_crystals = 0
-        total_scrolls = 0
-        total_silver = 0
-
-        while gear.awakening_level < self.config.target_level:
-            target_level = gear.awakening_level + 1
-
-            # Determine valks
-            valks_type = None
-            if self.config.valks_100_from > 0 and target_level >= self.config.valks_100_from:
-                valks_type = "100"
-            elif self.config.valks_50_from > 0 and target_level >= self.config.valks_50_from:
-                valks_type = "50"
-            elif self.config.valks_10_from > 0 and target_level >= self.config.valks_10_from:
-                valks_type = "10"
-
-            # Crystal cost
-            total_crystals += 1
-            total_silver += prices.crystal_price
-
-            # Valks cost
-            if valks_type == "10":
-                total_silver += prices.valks_10_price
-            elif valks_type == "50":
-                total_silver += prices.valks_50_price
-            elif valks_type == "100":
-                total_silver += prices.valks_100_price
-
-            # Get success rate
-            base_rate = AWAKENING_ENHANCEMENT_RATES.get(target_level, 0.01)
-            if valks_type == "10":
-                base_rate = min(1.0, base_rate * VALKS_MULTIPLIER_10)
-            elif valks_type == "50":
-                base_rate = min(1.0, base_rate * VALKS_MULTIPLIER_50)
-            elif valks_type == "100":
-                base_rate = min(1.0, base_rate * VALKS_MULTIPLIER_100)
-
-            # Check anvil pity
-            current_energy = gear.get_energy(target_level)
-            max_energy = ANVIL_THRESHOLDS_AWAKENING.get(target_level, 999)
-            anvil_triggered = current_energy >= max_energy and max_energy > 0
-
-            if anvil_triggered:
-                gear.awakening_level = target_level
-                gear.reset_energy(target_level)
-                continue
-
-            # Roll for success
-            if simulator.rng.random() < base_rate:
-                gear.awakening_level = target_level
-                gear.reset_energy(target_level)
-            else:
-                # Failed
-                gear.add_energy(target_level)
-
-                if gear.awakening_level > 0:
-                    use_restoration = restoration_from > 0 and gear.awakening_level >= restoration_from
-
-                    if use_restoration:
-                        total_scrolls += RESTORATION_PER_ATTEMPT
-                        total_silver += prices.restoration_attempt_cost
-                        if simulator.rng.random() >= 0.5:  # Restoration failed
-                            gear.awakening_level -= 1
-                    else:
-                        gear.awakening_level -= 1
-
-        return (total_crystals, total_scrolls, total_silver)
+        engine_prices = MarketPrices(
+            crystal_price=prices.crystal_price,
+            restoration_bundle_price=prices.restoration_bundle_price,
+            valks_10_price=prices.valks_10_price,
+            valks_50_price=prices.valks_50_price,
+            valks_100_price=prices.valks_100_price,
+        )
+        engine_config = EngineConfig(
+            start_level=self.config.start_level,
+            target_level=self.config.target_level,
+            restoration_from=restoration_from,
+            use_hepta=False,
+            use_okta=False,
+            valks_10_from=self.config.valks_10_from,
+            valks_50_from=self.config.valks_50_from,
+            valks_100_from=self.config.valks_100_from,
+            prices=engine_prices,
+        )
+        engine = EnhancementEngine(engine_config)
+        result = engine.run_full_simulation()
+        return (result.crystals, result.scrolls, result.silver)
 
     def _format_silver(self, silver: int) -> str:
         """Format silver amount with K/M/B/T suffix."""
-        if silver >= 1_000_000_000_000:
-            return f"{silver / 1_000_000_000_000:.1f}T"
-        if silver >= 1_000_000_000:
-            return f"{silver / 1_000_000_000:.1f}B"
-        if silver >= 1_000_000:
-            return f"{silver / 1_000_000:.1f}M"
-        if silver >= 1_000:
-            return f"{silver / 1_000:.1f}K"
-        return str(silver)
+        return format_silver(silver)
 
     def on_button_pressed(self, event: Button.Pressed) -> None:
         if event.button.id == "back-button":

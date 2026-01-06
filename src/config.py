@@ -89,15 +89,15 @@ RESTORATION_SCROLL_COSTS: dict[int, int] = {
 # Restoration scroll success rate (50% chance to prevent downgrade)
 RESTORATION_SUCCESS_RATE: float = 0.50
 
+# Hepta/Okta sub-enhancement success rate
+# Used for VII→VIII (Hepta) and VIII→IX (Okta) failsafe paths
+HEPTA_OKTA_SUCCESS_RATE: float = 0.06  # 6% per sub-enhancement attempt
+
 # Advice of Valks bonuses (RELATIVE/MULTIPLICATIVE - not additive!)
 # Example: 0.5% base rate with +100% Valks = 0.5% × 2.0 = 1%
 VALKS_MULTIPLIER_10: float = 1.10    # +10% = ×1.1 (발크스의 조언)
 VALKS_MULTIPLIER_50: float = 1.50    # +50% = ×1.5 (강력한 발크스의 조언)
 VALKS_MULTIPLIER_100: float = 2.00   # +100% = ×2.0 (초월 발크스의 조언)
-
-# Legacy aliases (kept for backwards compatibility)
-VALKS_BONUS_SMALL: float = 0.10   # Used as additive in old code
-VALKS_BONUS_LARGE: float = 0.50   # Used as additive in old code
 
 # Arkram's Prophecy bonus (아크람의 예언)
 # Adds flat percentage based on item type
