@@ -1,6 +1,7 @@
 """TUI for BDM Enhancement Simulator using Textual."""
 import asyncio
 from dataclasses import dataclass, field
+from operator import itemgetter
 from typing import Optional
 
 from textual.app import App, ComposeResult
@@ -774,8 +775,8 @@ class SimulationScreen(Screen):
                     self._log_attempt(log, result)
                     self._update_stats()
 
-                # Use minimum 0.001s delay for "fast" mode
-                delay = max(0.001, self.config.speed)
+                # Use minimum 0.0001s delay for "fast" mode (10x faster)
+                delay = max(0.0001, self.config.speed)
                 await asyncio.sleep(delay)
 
             if self.running:
@@ -1389,6 +1390,7 @@ class HeptaOktaStrategyScreen(Screen):
         self.num_simulations = num_simulations
         self.running = False
         self.results = {}
+        self._task: asyncio.Task | None = None
 
     def compose(self) -> ComposeResult:
         yield Header()
@@ -1409,60 +1411,114 @@ class HeptaOktaStrategyScreen(Screen):
     async def on_mount(self) -> None:
         """Start the analysis when screen is mounted."""
         self.running = True
-        asyncio.create_task(self._run_analysis())
+        self._task = asyncio.create_task(self._run_analysis())
+
+    async def on_unmount(self) -> None:
+        """Cancel task when screen is unmounted."""
+        await self._cancel_task()
+
+    async def _cancel_task(self) -> None:
+        """Cancel the running analysis task and clean up."""
+        self.running = False
+        if self._task is not None:
+            if not self._task.done():
+                self._task.cancel()
+                try:
+                    await self._task
+                except asyncio.CancelledError:
+                    pass
+            self._task = None
 
     async def _run_analysis(self) -> None:
         """Run Monte Carlo analysis for different Hepta/Okta strategies."""
-        log = self.query_one("#results-container", RichLog)
-        status = self.query_one("#status", Static)
+        try:
+            log = self.query_one("#results-container", RichLog)
+            status = self.query_one("#status", Static)
 
-        log.write("[bold]Monte Carlo Hepta/Okta Strategy Analysis[/bold]")
-        start_info = f"Start: +{ROMAN_NUMERALS[self.config.start_level]}"
-        if self.config.start_hepta > 0:
-            start_info += f" (Hepta {self.config.start_hepta}/5)"
-        if self.config.start_okta > 0:
-            start_info += f" (Okta {self.config.start_okta}/10)"
-        log.write(f"{start_info} → Target: +{ROMAN_NUMERALS[self.config.target_level]}, Simulations: {self.num_simulations}")
-        log.write("Restoration: from +VI (fixed)\n")
+            log.write("[bold]Monte Carlo Hepta/Okta Strategy Analysis[/bold]")
+            start_info = f"Start: +{ROMAN_NUMERALS[self.config.start_level]}"
+            if self.config.start_hepta > 0:
+                start_info += f" (Hepta {self.config.start_hepta}/5)"
+            if self.config.start_okta > 0:
+                start_info += f" (Okta {self.config.start_okta}/10)"
+            log.write(f"{start_info} → Target: +{ROMAN_NUMERALS[self.config.target_level]}, Simulations: {self.num_simulations}")
+            log.write("Restoration: from +VI (fixed)\n")
 
-        # Test 4 Hepta/Okta combinations with restoration from VI
-        # Format: (use_hepta, use_okta, label)
-        strategies = [
-            (True, True, "Hepta+Okta"),
-            (True, False, "Hepta only"),
-            (False, True, "Okta only"),
-            (False, False, "Normal"),
-        ]
-        results = {}
+            # Test 4 Hepta/Okta combinations with restoration from VI
+            # Format: (use_hepta, use_okta, label)
+            strategies = [
+                (True, True, "Hepta+Okta"),
+                (True, False, "Hepta only"),
+                (False, True, "Okta only"),
+                (False, False, "Normal"),
+            ]
+            results = {}
 
-        await self._redraw_table(log, results, strategies)
-        await asyncio.sleep(0.01)
+            await self._redraw_table(log, results, strategies)
+            await asyncio.sleep(0.01)
 
-        # Run simulations for each strategy
-        batch_size = max(10, self.num_simulations // 20)  # Update every 5%
+            # Pre-create engine prices once (avoid repeated object creation)
+            prices = self.config.market_prices
+            engine_prices = MarketPrices(
+                crystal_price=prices.crystal_price,
+                restoration_bundle_price=prices.restoration_bundle_price,
+                valks_10_price=prices.valks_10_price,
+                valks_50_price=prices.valks_50_price,
+                valks_100_price=prices.valks_100_price,
+            )
 
-        for use_hepta, use_okta, label in strategies:
-            if not self.running:
-                break
+            # Run simulations for each strategy
+            # Yield every 5 simulations for responsive UI
+            batch_size = 5
+            num_sims = self.num_simulations  # Local var for speed
+            silver_key = itemgetter(2)  # Pre-create sort key
 
-            status.update(f"Status: Testing {label}...")
-            strategy_key = (use_hepta, use_okta)
+            for use_hepta, use_okta, label in strategies:
+                if not self.running:
+                    break
 
-            sim_results = []  # List of (crystals, scrolls, silver, exquisite)
-            for i in range(self.num_simulations):
-                result = self._run_single_simulation(
+                status.update(f"Status: Testing {label}...")
+                strategy_key = (use_hepta, use_okta)
+
+                # Create config once per strategy
+                engine_config = EngineConfig(
+                    start_level=self.config.start_level,
+                    target_level=self.config.target_level,
                     restoration_from=6,  # Fixed at +VI
                     use_hepta=use_hepta,
-                    use_okta=use_okta
+                    use_okta=use_okta,
+                    start_hepta=self.config.start_hepta,
+                    start_okta=self.config.start_okta,
+                    valks_10_from=self.config.valks_10_from,
+                    valks_50_from=self.config.valks_50_from,
+                    valks_100_from=self.config.valks_100_from,
+                    prices=engine_prices,
                 )
-                sim_results.append(result)
 
-                # Update progress periodically
-                if (i + 1) % batch_size == 0 or i == self.num_simulations - 1:
-                    progress = int((i + 1) / self.num_simulations * 100)
+                # Create engine once per strategy, reuse with reset()
+                engine = EnhancementEngine(engine_config)
+                sim_results = []  # List of (crystals, scrolls, silver, exquisite)
 
-                    # Sort by silver for percentiles
-                    sorted_by_silver = sorted(sim_results, key=lambda x: x[2])
+                for i in range(num_sims):
+                    if not self.running:
+                        break
+                    # Use fast path - returns tuple directly, no dataclass overhead
+                    result = engine.run_fast()
+                    sim_results.append(result)
+                    engine.reset()  # Reset for next simulation
+
+                    # Update progress periodically (just status, not full table)
+                    if (i + 1) % batch_size == 0:
+                        progress = int((i + 1) / num_sims * 100)
+                        status.update(f"Status: Testing {label}... {progress}%")
+                        await asyncio.sleep(0)  # Yield to event loop
+
+                if not self.running:
+                    break
+
+                # Sort only once at the end of each strategy
+                if sim_results:
+                    sorted_by_silver = sorted(sim_results, key=silver_key)
                     p50_idx = len(sorted_by_silver) // 2
                     p90_idx = int(len(sorted_by_silver) * 0.9)
 
@@ -1471,19 +1527,23 @@ class HeptaOktaStrategyScreen(Screen):
                         "p90": sorted_by_silver[p90_idx],
                         "worst": sorted_by_silver[-1],
                         "label": label,
-                        "progress": progress,
+                        "progress": 100,
                     }
 
-                    # Redraw table
+                    # Redraw table after completing each strategy
                     await self._redraw_table(log, results, strategies)
-                    await asyncio.sleep(0.001)
+                    await asyncio.sleep(0)
 
-        # Final redraw with best highlighted
-        if results:
-            await self._redraw_table(log, results, strategies, final=True)
+            # Final redraw with best highlighted
+            if results and self.running:
+                await self._redraw_table(log, results, strategies, final=True)
 
-        status.update("Status: Complete!")
-        self.running = False
+            status.update("Status: Complete!")
+        except asyncio.CancelledError:
+            # Task was cancelled - clean exit
+            pass
+        finally:
+            self.running = False
 
     async def _redraw_table(self, log: RichLog, results: dict, strategies: list, final: bool = False) -> None:
         """Redraw the results table."""
@@ -1545,58 +1605,20 @@ class HeptaOktaStrategyScreen(Screen):
             best_p50_silver = self._format_silver(results[best_strategy]["p50"][2])
             log.write(f"\n[bold green]★ Recommended: {best_label} (P50 Silver: {best_p50_silver})[/bold green]")
 
-    def _get_exquisite_crystal_cost(self) -> int:
-        """Calculate the cost of one Exquisite Black Crystal in silver."""
-        prices = self.config.market_prices
-        scroll_cost = (EXQUISITE_BLACK_CRYSTAL_RECIPE["restoration_scrolls"] *
-                       prices.restoration_bundle_price) // RESTORATION_MARKET_BUNDLE_SIZE
-        valks_cost = EXQUISITE_BLACK_CRYSTAL_RECIPE["valks_100"] * prices.valks_100_price
-        crystal_cost = EXQUISITE_BLACK_CRYSTAL_RECIPE["pristine_black_crystal"] * prices.crystal_price
-        return scroll_cost + valks_cost + crystal_cost
-
-    def _run_single_simulation(self, restoration_from: int, use_hepta: bool = False, use_okta: bool = False) -> tuple[int, int, int, int]:
-        """Run a single simulation and return (crystals, scrolls, silver, exquisite)."""
-        # Create engine config from screen config
-        prices = self.config.market_prices
-        engine_prices = MarketPrices(
-            crystal_price=prices.crystal_price,
-            restoration_bundle_price=prices.restoration_bundle_price,
-            valks_10_price=prices.valks_10_price,
-            valks_50_price=prices.valks_50_price,
-            valks_100_price=prices.valks_100_price,
-        )
-        engine_config = EngineConfig(
-            start_level=self.config.start_level,
-            target_level=self.config.target_level,
-            restoration_from=restoration_from,
-            use_hepta=use_hepta,
-            use_okta=use_okta,
-            start_hepta=self.config.start_hepta,
-            start_okta=self.config.start_okta,
-            valks_10_from=self.config.valks_10_from,
-            valks_50_from=self.config.valks_50_from,
-            valks_100_from=self.config.valks_100_from,
-            prices=engine_prices,
-        )
-
-        engine = EnhancementEngine(engine_config)
-        result = engine.run_full_simulation()
-        return (result.crystals, result.scrolls, result.silver, result.exquisite_crystals)
-
     def _format_silver(self, silver: int) -> str:
         """Format silver amount with K/M/B/T suffix."""
         return format_silver(silver)
 
-    def on_button_pressed(self, event: Button.Pressed) -> None:
+    async def on_button_pressed(self, event: Button.Pressed) -> None:
         if event.button.id == "back-button":
-            self.action_back()
+            await self.action_back()
 
-    def action_back(self) -> None:
-        self.running = False
+    async def action_back(self) -> None:
+        await self._cancel_task()
         self.app.pop_screen()
 
-    def action_quit(self) -> None:
-        self.running = False
+    async def action_quit(self) -> None:
+        await self._cancel_task()
         self.app.exit()
 
 
@@ -1653,6 +1675,7 @@ class RestorationStrategyScreen(Screen):
         self.num_simulations = num_simulations
         self.running = False
         self.results = {}
+        self._task: asyncio.Task | None = None
 
     def compose(self) -> ComposeResult:
         yield Header()
@@ -1673,65 +1696,131 @@ class RestorationStrategyScreen(Screen):
     async def on_mount(self) -> None:
         """Start the analysis when screen is mounted."""
         self.running = True
-        asyncio.create_task(self._run_analysis())
+        self._task = asyncio.create_task(self._run_analysis())
+
+    async def on_unmount(self) -> None:
+        """Cancel task when screen is unmounted."""
+        await self._cancel_task()
+
+    async def _cancel_task(self) -> None:
+        """Cancel the running analysis task and clean up."""
+        self.running = False
+        if self._task is not None:
+            if not self._task.done():
+                self._task.cancel()
+                try:
+                    await self._task
+                except asyncio.CancelledError:
+                    pass
+            self._task = None
 
     async def _run_analysis(self) -> None:
         """Run Monte Carlo analysis for different restoration strategies."""
-        log = self.query_one("#results-container", RichLog)
-        status = self.query_one("#status", Static)
+        try:
+            log = self.query_one("#results-container", RichLog)
+            status = self.query_one("#status", Static)
 
-        log.write("[bold]Monte Carlo Restoration Strategy Analysis[/bold]")
-        log.write(f"Start: +{ROMAN_NUMERALS[self.config.start_level]} → Target: +{ROMAN_NUMERALS[self.config.target_level]}, Simulations: {self.num_simulations}\n")
+            log.write("[bold]Monte Carlo Restoration Strategy Analysis[/bold]")
+            log.write(f"Start: +{ROMAN_NUMERALS[self.config.start_level]} → Target: +{ROMAN_NUMERALS[self.config.target_level]}, Simulations: {self.num_simulations}\n")
 
-        # Test restoration starting from IV(4), V(5), VI(6), VII(7), VIII(8) up to target-1
-        restoration_options = [i for i in range(4, self.config.target_level)]
-        results = {}
+            # Test restoration starting from IV(4), V(5), VI(6), VII(7), VIII(8) up to target-1
+            restoration_options = [i for i in range(4, self.config.target_level)]
+            results = {}
 
-        await self._redraw_table(log, results, restoration_options)
-        await asyncio.sleep(0.01)
+            await self._redraw_table(log, results, restoration_options)
+            await asyncio.sleep(0.01)
 
-        # Run simulations for each strategy
-        batch_size = max(10, self.num_simulations // 20)  # Update every 5%
+            # Pre-create engine prices once (avoid repeated object creation)
+            prices = self.config.market_prices
+            engine_prices = MarketPrices(
+                crystal_price=prices.crystal_price,
+                restoration_bundle_price=prices.restoration_bundle_price,
+                valks_10_price=prices.valks_10_price,
+                valks_50_price=prices.valks_50_price,
+                valks_100_price=prices.valks_100_price,
+            )
 
-        for rest_from in restoration_options:
-            if not self.running:
-                break
+            # Run simulations for each strategy
+            # Yield every 5 simulations for responsive UI
+            batch_size = 5
+            num_sims = self.num_simulations  # Local var for speed
+            silver_key = itemgetter(2)  # Pre-create sort key
 
-            rest_label = f"+{ROMAN_NUMERALS[rest_from]}"
-            status.update(f"Status: Testing restoration from {rest_label}...")
+            for rest_from in restoration_options:
+                if not self.running:
+                    break
 
-            sim_results = []  # List of (crystals, scrolls, silver)
-            for i in range(self.num_simulations):
-                result = self._run_single_simulation(rest_from)
-                sim_results.append(result)
+                rest_label = f"+{ROMAN_NUMERALS[rest_from]}"
+                status.update(f"Status: Testing restoration from {rest_label}...")
 
-                # Update progress periodically
-                if (i + 1) % batch_size == 0 or i == self.num_simulations - 1:
-                    progress = int((i + 1) / self.num_simulations * 100)
+                # Create config once per strategy
+                engine_config = EngineConfig(
+                    start_level=self.config.start_level,
+                    target_level=self.config.target_level,
+                    restoration_from=rest_from,
+                    use_hepta=False,
+                    use_okta=False,
+                    start_hepta=self.config.start_hepta,
+                    start_okta=self.config.start_okta,
+                    valks_10_from=self.config.valks_10_from,
+                    valks_50_from=self.config.valks_50_from,
+                    valks_100_from=self.config.valks_100_from,
+                    prices=engine_prices,
+                )
 
-                    # Sort by silver for percentiles
-                    sorted_by_silver = sorted(sim_results, key=lambda x: x[2])
-                    p50_idx = len(sorted_by_silver) // 2
-                    p90_idx = int(len(sorted_by_silver) * 0.9)
+                # Create engine once per strategy, reuse with reset()
+                engine = EnhancementEngine(engine_config)
+                sim_results = []  # List of (crystals, scrolls, silver)
 
-                    results[rest_from] = {
-                        "p50": sorted_by_silver[p50_idx],
-                        "p90": sorted_by_silver[p90_idx],
-                        "worst": sorted_by_silver[-1],
-                        "label": rest_label,
-                        "progress": progress,
-                    }
+                for i in range(num_sims):
+                    if not self.running:
+                        break
+                    # Use fast path - returns tuple directly, no dataclass overhead
+                    result = engine.run_fast()
+                    # Only take first 3 elements (crystals, scrolls, silver) for this screen
+                    sim_results.append((result[0], result[1], result[2]))
+                    engine.reset()  # Reset for next simulation
 
-                    # Redraw table
-                    await self._redraw_table(log, results, restoration_options)
-                    await asyncio.sleep(0.001)
+                    # Update progress periodically (just status, not full table)
+                    if (i + 1) % batch_size == 0:
+                        progress = int((i + 1) / num_sims * 100)
+                        status.update(f"Status: Testing restoration from {rest_label}... {progress}%")
+                        await asyncio.sleep(0)  # Yield to event loop
 
-        # Final redraw with best highlighted
-        if results:
-            await self._redraw_table(log, results, restoration_options, final=True)
+                if not self.running:
+                    break
 
-        status.update("Status: Complete!")
-        self.running = False
+                # Skip processing if cancelled mid-simulation
+                if not sim_results:
+                    continue
+
+                # Sort only once at the end of each strategy
+                sorted_by_silver = sorted(sim_results, key=silver_key)
+                p50_idx = len(sorted_by_silver) // 2
+                p90_idx = int(len(sorted_by_silver) * 0.9)
+
+                results[rest_from] = {
+                    "p50": sorted_by_silver[p50_idx],
+                    "p90": sorted_by_silver[p90_idx],
+                    "worst": sorted_by_silver[-1],
+                    "label": rest_label,
+                    "progress": 100,
+                }
+
+                # Redraw table after completing each strategy
+                await self._redraw_table(log, results, restoration_options)
+                await asyncio.sleep(0)
+
+            # Final redraw with best highlighted
+            if results and self.running:
+                await self._redraw_table(log, results, restoration_options, final=True)
+
+            status.update("Status: Complete!")
+        except asyncio.CancelledError:
+            # Task was cancelled - clean exit
+            pass
+        finally:
+            self.running = False
 
     async def _redraw_table(self, log: RichLog, results: dict, restoration_options: list, final: bool = False) -> None:
         """Redraw the results table."""
@@ -1786,45 +1875,20 @@ class RestorationStrategyScreen(Screen):
             best_p50_silver = self._format_silver(results[best_strategy]["p50"][2])
             log.write(f"\n[bold green]★ Recommended: {best_label} (P50 Silver: {best_p50_silver})[/bold green]")
 
-    def _run_single_simulation(self, restoration_from: int) -> tuple[int, int, int]:
-        """Run a single simulation and return (crystals, scrolls, silver)."""
-        prices = self.config.market_prices
-        engine_prices = MarketPrices(
-            crystal_price=prices.crystal_price,
-            restoration_bundle_price=prices.restoration_bundle_price,
-            valks_10_price=prices.valks_10_price,
-            valks_50_price=prices.valks_50_price,
-            valks_100_price=prices.valks_100_price,
-        )
-        engine_config = EngineConfig(
-            start_level=self.config.start_level,
-            target_level=self.config.target_level,
-            restoration_from=restoration_from,
-            use_hepta=False,
-            use_okta=False,
-            valks_10_from=self.config.valks_10_from,
-            valks_50_from=self.config.valks_50_from,
-            valks_100_from=self.config.valks_100_from,
-            prices=engine_prices,
-        )
-        engine = EnhancementEngine(engine_config)
-        result = engine.run_full_simulation()
-        return (result.crystals, result.scrolls, result.silver)
-
     def _format_silver(self, silver: int) -> str:
         """Format silver amount with K/M/B/T suffix."""
         return format_silver(silver)
 
-    def on_button_pressed(self, event: Button.Pressed) -> None:
+    async def on_button_pressed(self, event: Button.Pressed) -> None:
         if event.button.id == "back-button":
-            self.action_back()
+            await self.action_back()
 
-    def action_back(self) -> None:
-        self.running = False
+    async def action_back(self) -> None:
+        await self._cancel_task()
         self.app.pop_screen()
 
-    def action_quit(self) -> None:
-        self.running = False
+    async def action_quit(self) -> None:
+        await self._cancel_task()
         self.app.exit()
 
 
