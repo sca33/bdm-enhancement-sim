@@ -4,6 +4,9 @@ import json
 import sys
 from typing import Optional
 
+# Import item_types to trigger module registration
+from . import item_types  # noqa: F401
+from .core import ItemTypeRegistry
 from .simulator import (
     AwakeningSimulator,
     EnhancementStrategy,
@@ -208,7 +211,7 @@ Strategy presets:
   no_restoration      Never use restoration scrolls
   restoration_above_3 Use restoration only at +III and above
   restoration_above_5 Use restoration only at +V and above
-  valks_high_tier     Use +50% valks at +VI and above
+  valks_high_tier     Use +50%% valks at +VI and above
   full_optimal        Use restoration + optimal valks
         """,
     )
@@ -258,7 +261,26 @@ Strategy presets:
         help="Starting awakening level (default: 0)",
     )
 
+    # Get available item types from registry
+    available_types = [info.id for info in ItemTypeRegistry.get_all_info()]
+    implemented_types = [info.id for info in ItemTypeRegistry.get_all_info() if info.implemented]
+
+    implemented_help = "Item type to simulate (implemented: " + ", ".join(implemented_types) + ")"
+    parser.add_argument(
+        "--item-type", "-i",
+        choices=available_types,
+        default="awakening",
+        help=implemented_help,
+    )
+
     args = parser.parse_args()
+
+    # Check if the selected item type is implemented
+    if not ItemTypeRegistry.is_implemented(args.item_type):
+        module_info = ItemTypeRegistry.get(args.item_type).get_info()
+        print(f"Error: '{module_info.name}' is not yet implemented", file=sys.stderr)
+        print(f"Available implemented types: {', '.join(implemented_types)}", file=sys.stderr)
+        sys.exit(1)
 
     if args.show_rates:
         print_enhancement_table()

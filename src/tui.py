@@ -19,6 +19,10 @@ from textual.widgets import (
     RichLog,
     Rule,
 )
+
+# Import item_types to trigger module registration
+from . import item_types  # noqa: F401
+from .screens import ModuleSelectScreen
 from .simulator import (
     AwakeningSimulator,
     GearState,
@@ -144,12 +148,17 @@ class ConfigScreen(Screen):
 
     BINDINGS = [
         Binding("q", "quit", "Quit"),
+        Binding("escape", "back", "Back"),
         Binding("enter", "start", "Start Simulation"),
     ]
 
     def __init__(self):
         super().__init__()
         self.config = SimConfig()
+
+    def action_back(self) -> None:
+        """Go back to module selection screen."""
+        self.app.pop_screen()
 
     def compose(self) -> ComposeResult:
         yield Header()
@@ -1883,7 +1892,7 @@ class BDMEnhancementApp(App):
     ]
 
     def on_mount(self) -> None:
-        self.push_screen(ConfigScreen())
+        self.push_screen(ModuleSelectScreen())
 
 
 def main():
