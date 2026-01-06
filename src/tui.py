@@ -937,10 +937,9 @@ class SimulationScreen(Screen):
                 "sub_pity": 0,
             }
 
-        # Roll for success (using same base rate as normal enhancement)
-        # Hepta/Okta doesn't specify success rate - use arbitrary 10% per sub-attempt
-        # This may need adjustment based on actual game mechanics
-        base_rate = 0.10  # 10% per sub-enhancement attempt
+        # Roll for success
+        # Hepta/Okta sub-enhancement has fixed 6% success rate
+        base_rate = 0.06  # 6% per sub-enhancement attempt
 
         if self.simulator.rng.random() < base_rate:
             # Success on sub-enhancement
