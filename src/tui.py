@@ -913,7 +913,10 @@ class SimulationScreen(Screen):
         exquisite_cost = self._get_exquisite_crystal_cost() * crystals_per_attempt
         self.total_silver += exquisite_cost
         self.attempt_count += 1
-        self.target_attempts += 1
+        # Only count attempts for final target (Hepta=VIII, Okta=IX)
+        target_for_path = 8 if not is_okta else 9
+        if target_for_path == self.config.target_level:
+            self.target_attempts += 1
 
         # Check anvil pity
         anvil_triggered = current_pity >= anvil_pity
@@ -981,8 +984,6 @@ class SimulationScreen(Screen):
             self.gear.reset_energy(8)
             self.hepta_sub_progress = 0
             self.hepta_sub_pity = 0
-            if 8 < self.config.target_level:
-                self.target_attempts = 0
             return True
 
         if ((self.config.use_okta or self.okta_sub_progress > 0) and
@@ -993,8 +994,6 @@ class SimulationScreen(Screen):
             self.gear.reset_energy(9)
             self.okta_sub_progress = 0
             self.okta_sub_pity = 0
-            if 9 < self.config.target_level:
-                self.target_attempts = 0
             return True
 
         return False
@@ -1027,7 +1026,9 @@ class SimulationScreen(Screen):
         # Track resources using custom market prices from config
         prices = self.config.market_prices
         self.attempt_count += 1
-        self.target_attempts += 1  # Track attempts on this target level
+        # Only count attempts for final target level
+        if target_level == self.config.target_level:
+            self.target_attempts += 1
         self.total_crystals += 1
         self.total_silver += prices.crystal_price
 
@@ -1048,9 +1049,6 @@ class SimulationScreen(Screen):
             # Guaranteed success
             self.gear.awakening_level = target_level
             self.gear.reset_energy(target_level)
-            # Only reset attempts if not at final target
-            if target_level < self.config.target_level:
-                self.target_attempts = 0
             return AttemptResult(
                 success=True,
                 starting_level=starting_level,
@@ -1066,9 +1064,6 @@ class SimulationScreen(Screen):
         if success:
             self.gear.awakening_level = target_level
             self.gear.reset_energy(target_level)
-            # Only reset attempts if not at final target
-            if target_level < self.config.target_level:
-                self.target_attempts = 0
             return AttemptResult(
                 success=True,
                 starting_level=starting_level,
