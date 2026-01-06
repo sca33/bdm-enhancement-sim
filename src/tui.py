@@ -693,6 +693,8 @@ class SimulationScreen(Screen):
         self.okta_sub_progress = config.start_okta    # Starting Okta progress (0-9)
         self.hepta_sub_pity = 0      # Current pity for active Hepta sub-enhancement
         self.okta_sub_pity = 0       # Current pity for active Okta sub-enhancement
+        # Snapshot of anvil energy for display after reaching target
+        self.final_anvil_snapshot: dict[int, int] | None = None
 
     def compose(self) -> ComposeResult:
         yield Header()
@@ -748,6 +750,9 @@ class SimulationScreen(Screen):
                     with Horizontal(classes="stat-row"):
                         yield Static("Silver Total:", classes="stat-label")
                         yield Static("0", id="stat-silver", classes="stat-value stat-value-highlight")
+                    with Horizontal(classes="stat-row"):
+                        yield Static("Time Spent:", classes="stat-label")
+                        yield Static("0m 0s", id="stat-time", classes="stat-value")
 
         with Horizontal(id="controls"):
             yield Button("Back", id="back-button", variant="default")
@@ -1046,6 +1051,9 @@ class SimulationScreen(Screen):
 
         if anvil_triggered:
             # Guaranteed success
+            # Save anvil snapshot before reaching final target
+            if target_level == self.config.target_level:
+                self.final_anvil_snapshot = dict(self.gear.anvil_energy)
             self.gear.awakening_level = target_level
             self.gear.reset_energy(target_level)
             return AttemptResult(
@@ -1061,6 +1069,9 @@ class SimulationScreen(Screen):
         success = self.simulator.rng.random() < base_rate
 
         if success:
+            # Save anvil snapshot before reaching final target
+            if target_level == self.config.target_level:
+                self.final_anvil_snapshot = dict(self.gear.anvil_energy)
             self.gear.awakening_level = target_level
             self.gear.reset_energy(target_level)
             return AttemptResult(
@@ -1204,9 +1215,10 @@ class SimulationScreen(Screen):
 
     def _update_anvil_pity(self) -> None:
         """Update the anvil pity display for levels V-X."""
-        # Update each level's anvil pity display
+        # Use snapshot if target was reached, otherwise use live values
+        energy_source = self.final_anvil_snapshot if self.final_anvil_snapshot else self.gear.anvil_energy
         for level in range(5, 11):
-            current_energy = self.gear.get_energy(level)
+            current_energy = energy_source.get(level, 0)
             cap = ANVIL_THRESHOLDS_AWAKENING.get(level, 0)
             self.query_one(f"#anvil-{level}", Static).update(f"{current_energy}/{cap}")
 
@@ -1219,6 +1231,18 @@ class SimulationScreen(Screen):
         if silver >= 1_000:
             return f"{silver / 1_000:.1f}K"
         return str(silver)
+
+    def _format_time(self, seconds: int) -> str:
+        """Format seconds into human-readable time (hours/minutes/seconds)."""
+        if seconds >= 3600:
+            hours = seconds // 3600
+            minutes = (seconds % 3600) // 60
+            return f"{hours}h {minutes}m"
+        if seconds >= 60:
+            minutes = seconds // 60
+            secs = seconds % 60
+            return f"{minutes}m {secs}s"
+        return f"{seconds}s"
 
     def _log_completion(self, log: RichLog) -> None:
         """Log completion message."""
@@ -1334,6 +1358,8 @@ class SimulationScreen(Screen):
         self.query_one("#stat-valks-50", Static).update(str(self.total_valks_50))
         self.query_one("#stat-valks-100", Static).update(str(self.total_valks_100))
         self.query_one("#stat-silver", Static).update(self._format_silver(self.total_silver))
+        # Time spent: 1 second per enhancement attempt
+        self.query_one("#stat-time", Static).update(self._format_time(self.attempt_count))
 
     def on_button_pressed(self, event: Button.Pressed) -> None:
         if event.button.id == "back-button":
@@ -1367,6 +1393,8 @@ class SimulationScreen(Screen):
         self.okta_sub_progress = self.config.start_okta
         self.hepta_sub_pity = 0
         self.okta_sub_pity = 0
+        # Reset anvil snapshot
+        self.final_anvil_snapshot = None
 
         # Clear log
         log = self.query_one("#log-container", RichLog)
