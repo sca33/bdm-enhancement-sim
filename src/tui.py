@@ -82,6 +82,9 @@ class MarketPrices:
 class SimConfig:
     """Configuration for a simulation run."""
     target_level: int = 9
+    start_level: int = 0        # Starting awakening level (0-9)
+    start_hepta: int = 0        # Starting Hepta sub-enhancement progress (0-4)
+    start_okta: int = 0         # Starting Okta sub-enhancement progress (0-9)
     valks_10_from: int = 1      # Use +10% Valks starting from this level (0 = never)
     valks_50_from: int = 3      # Use +50% Valks starting from this level (0 = never)
     valks_100_from: int = 5     # Use +100% Valks starting from this level (0 = never)
@@ -157,6 +160,10 @@ class ConfigScreen(Screen):
         color: $primary;
         margin-top: 1;
     }
+
+    .hidden {
+        display: none;
+    }
     """
 
     BINDINGS = [
@@ -175,14 +182,38 @@ class ConfigScreen(Screen):
             yield Static("BDM Awakening Enhancement Simulator", id="title")
             yield Rule()
 
-            # Target level
-            yield Static("Target Settings", classes="section-title")
+            # Target and Starting level
+            yield Static("Target & Starting Settings", classes="section-title")
             with Horizontal(classes="config-row"):
                 yield Label("Target Level:", classes="config-label")
                 yield Select(
                     [(f"+{ROMAN_NUMERALS[i]} ({i})", i) for i in range(1, 11)],
                     value=9,
                     id="target-level",
+                    classes="config-select",
+                )
+            with Horizontal(classes="config-row"):
+                yield Label("Start Level:", classes="config-label")
+                yield Select(
+                    [(f"+{ROMAN_NUMERALS[i]} ({i})", i) for i in range(0, 10)],
+                    value=0,
+                    id="start-level",
+                    classes="config-select",
+                )
+            with Horizontal(classes="config-row", id="start-hepta-row"):
+                yield Label("Start Hepta Progress:", classes="config-label")
+                yield Select(
+                    [(f"{i}/5", i) for i in range(0, 5)],
+                    value=0,
+                    id="start-hepta",
+                    classes="config-select",
+                )
+            with Horizontal(classes="config-row", id="start-okta-row"):
+                yield Label("Start Okta Progress:", classes="config-label")
+                yield Select(
+                    [(f"{i}/10", i) for i in range(0, 10)],
+                    value=0,
+                    id="start-okta",
                     classes="config-select",
                 )
 
@@ -347,6 +378,34 @@ class ConfigScreen(Screen):
 
         yield Footer()
 
+    def on_mount(self) -> None:
+        """Hide Hepta/Okta starting rows initially."""
+        self.query_one("#start-hepta-row").add_class("hidden")
+        self.query_one("#start-okta-row").add_class("hidden")
+
+    def on_select_changed(self, event: Select.Changed) -> None:
+        """Handle start level changes to show/hide Hepta/Okta rows."""
+        if event.select.id == "start-level":
+            start_level = event.value
+            hepta_row = self.query_one("#start-hepta-row")
+            okta_row = self.query_one("#start-okta-row")
+
+            # Show Hepta row only if start level is VII (7)
+            if start_level == 7:
+                hepta_row.remove_class("hidden")
+            else:
+                hepta_row.add_class("hidden")
+                # Reset Hepta progress if not at level VII
+                self.query_one("#start-hepta", Select).value = 0
+
+            # Show Okta row only if start level is VIII (8)
+            if start_level == 8:
+                okta_row.remove_class("hidden")
+            else:
+                okta_row.add_class("hidden")
+                # Reset Okta progress if not at level VIII
+                self.query_one("#start-okta", Select).value = 0
+
     def _build_rates_table(self) -> str:
         """Build the rates table string."""
         lines = ["Level   Rate    Anvil Pity"]
@@ -383,6 +442,9 @@ class ConfigScreen(Screen):
     def _start_simulation(self) -> None:
         # Collect config values
         target_select = self.query_one("#target-level", Select)
+        start_level_select = self.query_one("#start-level", Select)
+        start_hepta_select = self.query_one("#start-hepta", Select)
+        start_okta_select = self.query_one("#start-okta", Select)
         valks_10_select = self.query_one("#valks-10", Select)
         valks_50_select = self.query_one("#valks-50", Select)
         valks_100_select = self.query_one("#valks-100", Select)
@@ -402,6 +464,9 @@ class ConfigScreen(Screen):
 
         self.config = SimConfig(
             target_level=target_select.value,
+            start_level=start_level_select.value,
+            start_hepta=start_hepta_select.value,
+            start_okta=start_okta_select.value,
             valks_10_from=valks_10_select.value,
             valks_50_from=valks_50_select.value,
             valks_100_from=valks_100_select.value,
@@ -417,6 +482,7 @@ class ConfigScreen(Screen):
     def _start_restoration_strategy_analysis(self) -> None:
         """Start restoration level strategy analysis (normal enhancement, varying restoration levels)."""
         target_select = self.query_one("#target-level", Select)
+        start_level_select = self.query_one("#start-level", Select)
         valks_10_select = self.query_one("#valks-10", Select)
         valks_50_select = self.query_one("#valks-50", Select)
         valks_100_select = self.query_one("#valks-100", Select)
@@ -437,6 +503,9 @@ class ConfigScreen(Screen):
 
         self.config = SimConfig(
             target_level=target_select.value,
+            start_level=start_level_select.value,
+            start_hepta=0,  # Not used for normal enhancement
+            start_okta=0,
             valks_10_from=valks_10_select.value,
             valks_50_from=valks_50_select.value,
             valks_100_from=valks_100_select.value,
@@ -452,6 +521,9 @@ class ConfigScreen(Screen):
     def _start_hepta_okta_strategy_analysis(self) -> None:
         """Start Hepta/Okta strategy analysis (with +VI restoration fixed)."""
         target_select = self.query_one("#target-level", Select)
+        start_level_select = self.query_one("#start-level", Select)
+        start_hepta_select = self.query_one("#start-hepta", Select)
+        start_okta_select = self.query_one("#start-okta", Select)
         valks_10_select = self.query_one("#valks-10", Select)
         valks_50_select = self.query_one("#valks-50", Select)
         valks_100_select = self.query_one("#valks-100", Select)
@@ -472,6 +544,9 @@ class ConfigScreen(Screen):
 
         self.config = SimConfig(
             target_level=target_select.value,
+            start_level=start_level_select.value,
+            start_hepta=start_hepta_select.value,
+            start_okta=start_okta_select.value,
             valks_10_from=valks_10_select.value,
             valks_50_from=valks_50_select.value,
             valks_100_from=valks_100_select.value,
@@ -598,11 +673,12 @@ class SimulationScreen(Screen):
         super().__init__()
         self.config = config
         self.simulator = AwakeningSimulator()
-        self.gear = GearState()
+        # Initialize gear state from config starting values
+        self.gear = GearState(awakening_level=config.start_level)
         self.running = False
         self.attempt_count = 0
         self.target_attempts = 0  # Attempts on current target level only
-        self.max_level_reached = 0  # Track highest level achieved
+        self.max_level_reached = config.start_level  # Track highest level achieved
         # Resource tracking
         self.total_crystals = 0
         self.total_scrolls = 0
@@ -612,8 +688,8 @@ class SimulationScreen(Screen):
         self.total_silver = 0
         # Hepta/Okta tracking
         self.total_exquisite_crystals = 0  # Exquisite Black Crystals used
-        self.hepta_sub_progress = 0  # 0-5 sub-enhancements completed
-        self.okta_sub_progress = 0   # 0-10 sub-enhancements completed
+        self.hepta_sub_progress = config.start_hepta  # Starting Hepta progress (0-4)
+        self.okta_sub_progress = config.start_okta    # Starting Okta progress (0-9)
         self.hepta_sub_pity = 0      # Current pity for active Hepta sub-enhancement
         self.okta_sub_pity = 0       # Current pity for active Okta sub-enhancement
 
@@ -622,8 +698,8 @@ class SimulationScreen(Screen):
 
         with Horizontal(id="level-caption"):
             yield Static(f"Target: +{ROMAN_NUMERALS[self.config.target_level]}", id="target-display", classes="caption-field")
-            yield Static("Current: 0", id="current-display", classes="caption-field")
-            yield Static("Max: 0", id="max-display", classes="caption-field")
+            yield Static(f"Current: +{ROMAN_NUMERALS[self.config.start_level]}", id="current-display", classes="caption-field")
+            yield Static(f"Max: +{ROMAN_NUMERALS[self.config.start_level]}", id="max-display", classes="caption-field")
             yield Static("Attempts: 0", id="attempts-display", classes="caption-field")
 
         yield RichLog(id="log-container", highlight=True, markup=True)
@@ -792,14 +868,26 @@ class SimulationScreen(Screen):
         return scroll_cost + valks_cost + crystal_cost
 
     def _should_use_hepta(self) -> bool:
-        """Check if we should use Hepta path for VII→VIII."""
-        return (self.config.use_hepta and
+        """Check if we should use Hepta path for VII→VIII.
+
+        Use Hepta if:
+        - Hepta is enabled, OR there's existing Hepta progress to complete
+        - Currently at level VII
+        - Hepta not yet complete
+        """
+        return ((self.config.use_hepta or self.hepta_sub_progress > 0) and
                 self.gear.awakening_level == 7 and
                 self.hepta_sub_progress < HEPTA_SUB_ENHANCEMENTS)
 
     def _should_use_okta(self) -> bool:
-        """Check if we should use Okta path for VIII→IX."""
-        return (self.config.use_okta and
+        """Check if we should use Okta path for VIII→IX.
+
+        Use Okta if:
+        - Okta is enabled, OR there's existing Okta progress to complete
+        - Currently at level VIII
+        - Okta not yet complete
+        """
+        return ((self.config.use_okta or self.okta_sub_progress > 0) and
                 self.gear.awakening_level == 8 and
                 self.okta_sub_progress < OKTA_SUB_ENHANCEMENTS)
 
@@ -1195,11 +1283,11 @@ class SimulationScreen(Screen):
     def action_restart(self) -> None:
         """Restart the simulation."""
         self.running = False
-        # Reset state
-        self.gear = GearState()
+        # Reset state to starting values from config
+        self.gear = GearState(awakening_level=self.config.start_level)
         self.attempt_count = 0
         self.target_attempts = 0
-        self.max_level_reached = 0
+        self.max_level_reached = self.config.start_level
         # Resource tracking
         self.total_crystals = 0
         self.total_scrolls = 0
@@ -1209,8 +1297,8 @@ class SimulationScreen(Screen):
         self.total_silver = 0
         # Hepta/Okta tracking
         self.total_exquisite_crystals = 0
-        self.hepta_sub_progress = 0
-        self.okta_sub_progress = 0
+        self.hepta_sub_progress = self.config.start_hepta
+        self.okta_sub_progress = self.config.start_okta
         self.hepta_sub_pity = 0
         self.okta_sub_pity = 0
 
@@ -1220,8 +1308,8 @@ class SimulationScreen(Screen):
 
         # Update displays
         self._update_stats()
-        self.query_one("#current-display", Static).update("Current: 0")
-        self.query_one("#max-display", Static).update("Max: 0")
+        self.query_one("#current-display", Static).update(f"Current: +{ROMAN_NUMERALS[self.config.start_level]}")
+        self.query_one("#max-display", Static).update(f"Max: +{ROMAN_NUMERALS[self.config.start_level]}")
         self.query_one("#attempts-display", Static).update("Attempts: 0")
 
         # Restart
@@ -1312,8 +1400,13 @@ class HeptaOktaStrategyScreen(Screen):
         log = self.query_one("#results-container", RichLog)
         status = self.query_one("#status", Static)
 
-        log.write("[bold]Monte Carlo Strategy Analysis[/bold]")
-        log.write(f"Target: +{ROMAN_NUMERALS[self.config.target_level]}, Simulations: {self.num_simulations}")
+        log.write("[bold]Monte Carlo Hepta/Okta Strategy Analysis[/bold]")
+        start_info = f"Start: +{ROMAN_NUMERALS[self.config.start_level]}"
+        if self.config.start_hepta > 0:
+            start_info += f" (Hepta {self.config.start_hepta}/5)"
+        if self.config.start_okta > 0:
+            start_info += f" (Okta {self.config.start_okta}/10)"
+        log.write(f"{start_info} → Target: +{ROMAN_NUMERALS[self.config.target_level]}, Simulations: {self.num_simulations}")
         log.write("Restoration: from +VI (fixed)\n")
 
         # Test 4 Hepta/Okta combinations with restoration from VI
@@ -1379,8 +1472,13 @@ class HeptaOktaStrategyScreen(Screen):
     async def _redraw_table(self, log: RichLog, results: dict, strategies: list, final: bool = False) -> None:
         """Redraw the results table."""
         log.clear()
-        log.write("[bold]Monte Carlo Strategy Analysis[/bold]")
-        log.write(f"Target: +{ROMAN_NUMERALS[self.config.target_level]}, Simulations: {self.num_simulations}")
+        log.write("[bold]Monte Carlo Hepta/Okta Strategy Analysis[/bold]")
+        start_info = f"Start: +{ROMAN_NUMERALS[self.config.start_level]}"
+        if self.config.start_hepta > 0:
+            start_info += f" (Hepta {self.config.start_hepta}/5)"
+        if self.config.start_okta > 0:
+            start_info += f" (Okta {self.config.start_okta}/10)"
+        log.write(f"{start_info} → Target: +{ROMAN_NUMERALS[self.config.target_level]}, Simulations: {self.num_simulations}")
         log.write("Restoration: from +VI (fixed)\n")
 
         # Header
@@ -1443,22 +1541,24 @@ class HeptaOktaStrategyScreen(Screen):
     def _run_single_simulation(self, restoration_from: int, use_hepta: bool = False, use_okta: bool = False) -> tuple[int, int, int, int]:
         """Run a single simulation and return (crystals, scrolls, silver, exquisite)."""
         simulator = AwakeningSimulator()
-        gear = GearState()
+        # Initialize from config starting values
+        gear = GearState(awakening_level=self.config.start_level)
         prices = self.config.market_prices
         total_crystals = 0
         total_scrolls = 0
         total_silver = 0
         total_exquisite = 0
 
-        # Hepta/Okta state
-        hepta_sub_progress = 0
-        okta_sub_progress = 0
+        # Hepta/Okta state - initialize from config
+        hepta_sub_progress = self.config.start_hepta
+        okta_sub_progress = self.config.start_okta
         hepta_sub_pity = 0
         okta_sub_pity = 0
 
         while gear.awakening_level < self.config.target_level:
             # Check if we should use Hepta path
-            if (use_hepta and
+            # Use Hepta if enabled OR if there's existing progress to complete
+            if ((use_hepta or hepta_sub_progress > 0) and
                 gear.awakening_level == 7 and
                 hepta_sub_progress < HEPTA_SUB_ENHANCEMENTS):
                 # Hepta sub-enhancement attempt
@@ -1484,7 +1584,8 @@ class HeptaOktaStrategyScreen(Screen):
                 continue
 
             # Check if we should use Okta path
-            if (use_okta and
+            # Use Okta if enabled OR if there's existing progress to complete
+            if ((use_okta or okta_sub_progress > 0) and
                 gear.awakening_level == 8 and
                 okta_sub_progress < OKTA_SUB_ENHANCEMENTS):
                 # Okta sub-enhancement attempt
@@ -1679,7 +1780,7 @@ class RestorationStrategyScreen(Screen):
         status = self.query_one("#status", Static)
 
         log.write("[bold]Monte Carlo Restoration Strategy Analysis[/bold]")
-        log.write(f"Target: +{ROMAN_NUMERALS[self.config.target_level]}, Simulations: {self.num_simulations}\n")
+        log.write(f"Start: +{ROMAN_NUMERALS[self.config.start_level]} → Target: +{ROMAN_NUMERALS[self.config.target_level]}, Simulations: {self.num_simulations}\n")
 
         # Test restoration starting from IV(4), V(5), VI(6), VII(7), VIII(8) up to target-1
         restoration_options = [i for i in range(4, self.config.target_level)]
@@ -1735,7 +1836,7 @@ class RestorationStrategyScreen(Screen):
         """Redraw the results table."""
         log.clear()
         log.write("[bold]Monte Carlo Restoration Strategy Analysis[/bold]")
-        log.write(f"Target: +{ROMAN_NUMERALS[self.config.target_level]}, Simulations: {self.num_simulations}\n")
+        log.write(f"Start: +{ROMAN_NUMERALS[self.config.start_level]} → Target: +{ROMAN_NUMERALS[self.config.target_level]}, Simulations: {self.num_simulations}\n")
 
         # Header
         log.write(f"{'Rest.From':<10} {'Prog.':>6} {'Crystals':>10} {'Scrolls':>10} {'Silver':>12}")
@@ -1787,7 +1888,8 @@ class RestorationStrategyScreen(Screen):
     def _run_single_simulation(self, restoration_from: int) -> tuple[int, int, int]:
         """Run a single simulation and return (crystals, scrolls, silver)."""
         simulator = AwakeningSimulator()
-        gear = GearState()
+        # Initialize from config starting value
+        gear = GearState(awakening_level=self.config.start_level)
         prices = self.config.market_prices
         total_crystals = 0
         total_scrolls = 0
