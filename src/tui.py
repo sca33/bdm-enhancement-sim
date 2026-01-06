@@ -89,7 +89,7 @@ class SimConfig:
     valks_50_from: int = 3      # Use +50% Valks starting from this level (0 = never)
     valks_100_from: int = 5     # Use +100% Valks starting from this level (0 = never)
     restoration_from: int = 6   # Use restoration from this level (0 = never)
-    speed: float = 0.0          # -1 = instant (precalc), 0 = fast (default)
+    speed: float = 0.0          # -1 = instant, 0 = fast (default), 1 = regular (in-game)
     market_prices: MarketPrices = field(default_factory=MarketPrices)
     use_hepta: bool = False     # Use Hepta path for VII→VIII (5 sub-enhancements)
     use_okta: bool = False      # Use Okta path for VIII→IX (10 sub-enhancements)
@@ -289,6 +289,7 @@ class ConfigScreen(Screen):
                     [
                         ("Fast", 0.0),      # Minimal delay, animated
                         ("Instant", -1.0),  # Precalculate all at once
+                        ("Regular", 1.0),   # ~1 second per enhancement (in-game speed)
                     ],
                     value=0.0,
                     id="speed",
@@ -812,6 +813,7 @@ class SimulationScreen(Screen):
                 # Check if we should use Hepta/Okta paths
                 if self._should_use_hepta():
                     result = self._perform_hepta_okta_attempt(is_okta=False)
+                    await self._flash_attempt(result["success"], result["anvil_triggered"])
                     self._log_hepta_okta_attempt(log, result, is_okta=False)
                     self._update_stats()
                     if self._check_hepta_okta_complete():
@@ -819,6 +821,7 @@ class SimulationScreen(Screen):
                         self._update_stats()
                 elif self._should_use_okta():
                     result = self._perform_hepta_okta_attempt(is_okta=True)
+                    await self._flash_attempt(result["success"], result["anvil_triggered"])
                     self._log_hepta_okta_attempt(log, result, is_okta=True)
                     self._update_stats()
                     if self._check_hepta_okta_complete():
@@ -826,6 +829,7 @@ class SimulationScreen(Screen):
                         self._update_stats()
                 else:
                     result = self._perform_enhancement()
+                    await self._flash_attempt(result.success, result.anvil_triggered)
                     self._log_attempt(log, result)
                     self._update_stats()
 
@@ -834,6 +838,7 @@ class SimulationScreen(Screen):
                 await asyncio.sleep(delay)
 
             if self.running:
+                await self._victory_celebration(log)
                 self._log_completion(log)
 
         self.running = False
@@ -1243,6 +1248,71 @@ class SimulationScreen(Screen):
         if self.total_valks_100 > 0:
             log.write(f"  Valks +100%: {self.total_valks_100}")
         log.write(f"  [yellow bold]Silver Total: {self._format_silver(self.total_silver)}[/yellow bold]")
+
+    def _is_regular_mode(self) -> bool:
+        """Check if running in Regular (in-game speed) mode."""
+        return self.config.speed >= 1.0
+
+    async def _flash_effect(self, color: str, duration: float = 0.15) -> None:
+        """Apply a flash effect by changing log container border color."""
+        log_container = self.query_one("#log-container", RichLog)
+        original_border = log_container.styles.border
+        log_container.styles.border = ("heavy", color)
+        self.refresh()
+        await asyncio.sleep(duration)
+        log_container.styles.border = original_border
+        self.refresh()
+
+    async def _flash_attempt(self, success: bool, anvil: bool = False) -> None:
+        """Flash screen based on attempt result (only in Regular mode)."""
+        if not self._is_regular_mode():
+            return
+
+        if anvil:
+            await self._flash_effect("yellow", 0.25)
+        elif success:
+            await self._flash_effect("green", 0.2)
+        else:
+            await self._flash_effect("red", 0.12)
+
+    async def _victory_celebration(self, log: RichLog) -> None:
+        """Epic victory celebration animation (only in Regular mode)."""
+        if not self._is_regular_mode():
+            return
+
+        target = ROMAN_NUMERALS[self.config.target_level]
+        log_container = self.query_one("#log-container", RichLog)
+        caption = self.query_one("#level-caption", Horizontal)
+
+        # Rapid flash sequence - the "flashbang"
+        for _ in range(4):
+            log_container.styles.border = ("heavy", "white")
+            caption.styles.background = "white"
+            self.refresh()
+            await asyncio.sleep(0.06)
+            log_container.styles.border = ("heavy", "gold")
+            caption.styles.background = "darkgoldenrod"
+            self.refresh()
+            await asyncio.sleep(0.08)
+
+        # Hold victory glow with golden theme
+        log_container.styles.border = ("double", "gold")
+        caption.styles.background = "darkgoldenrod"
+        self.refresh()
+
+        # ASCII art celebration
+        log.write("")
+        log.write("[bold yellow]★ ═══════════════════════════════════════════ ★[/bold yellow]")
+        log.write("[bold yellow]║                                               ║[/bold yellow]")
+        await asyncio.sleep(0.15)
+        log.write(f"[bold yellow]║      ✦  ✦  ✦   +{target} ACHIEVED!   ✦  ✦  ✦      ║[/bold yellow]")
+        await asyncio.sleep(0.15)
+        log.write("[bold yellow]║                                               ║[/bold yellow]")
+        log.write("[bold yellow]★ ═══════════════════════════════════════════ ★[/bold yellow]")
+        log.write("")
+
+        # Keep the golden glow for the stats display
+        await asyncio.sleep(1.5)
 
     def _update_stats(self) -> None:
         """Update statistics display."""
