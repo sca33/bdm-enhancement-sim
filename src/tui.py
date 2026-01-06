@@ -604,6 +604,7 @@ class SimulationScreen(Screen):
     BINDINGS = [
         Binding("q", "quit", "Quit"),
         Binding("r", "restart", "Restart"),
+        Binding("space", "toggle_pause", "Pause/Resume"),
         Binding("escape", "back", "Back to Config"),
     ]
 
@@ -614,6 +615,7 @@ class SimulationScreen(Screen):
         # Initialize gear state from config starting values
         self.gear = GearState(awakening_level=config.start_level)
         self.running = False
+        self.paused = False
         self.attempt_count = 0
         self.target_attempts = 0  # Attempts on current target level only
         self.max_level_reached = config.start_level  # Track highest level achieved
@@ -693,6 +695,7 @@ class SimulationScreen(Screen):
 
         with Horizontal(id="controls"):
             yield Button("Back", id="back-button", variant="default")
+            yield Button("Pause", id="pause-button", variant="primary")
             yield Button("Restart", id="restart-button", variant="warning")
 
         yield Footer()
@@ -752,6 +755,11 @@ class SimulationScreen(Screen):
             log.write("[bold]Starting enhancement simulation...[/bold]\n")
 
             while self.gear.awakening_level < self.config.target_level and self.running:
+                # Wait while paused
+                while self.paused and self.running:
+                    await asyncio.sleep(0.05)
+                if not self.running:
+                    break
                 # Check if we should use Hepta/Okta paths
                 if self._should_use_hepta():
                     result = self._perform_hepta_okta_attempt(is_okta=False)
@@ -1287,8 +1295,21 @@ class SimulationScreen(Screen):
     def on_button_pressed(self, event: Button.Pressed) -> None:
         if event.button.id == "back-button":
             self.action_back()
+        elif event.button.id == "pause-button":
+            self.action_toggle_pause()
         elif event.button.id == "restart-button":
             self.action_restart()
+
+    def action_toggle_pause(self) -> None:
+        """Toggle pause state."""
+        self.paused = not self.paused
+        pause_btn = self.query_one("#pause-button", Button)
+        if self.paused:
+            pause_btn.label = "Resume"
+            pause_btn.variant = "success"
+        else:
+            pause_btn.label = "Pause"
+            pause_btn.variant = "primary"
 
     def action_back(self) -> None:
         """Go back to config screen."""
@@ -1298,6 +1319,11 @@ class SimulationScreen(Screen):
     def action_restart(self) -> None:
         """Restart the simulation."""
         self.running = False
+        self.paused = False
+        # Reset pause button
+        pause_btn = self.query_one("#pause-button", Button)
+        pause_btn.label = "Pause"
+        pause_btn.variant = "primary"
         # Reset state to starting values from config
         self.gear = GearState(awakening_level=self.config.start_level)
         self.attempt_count = 0
