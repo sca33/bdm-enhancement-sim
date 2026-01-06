@@ -44,6 +44,7 @@ jobs:
           pip install pyinstaller
 
       - name: Build executable
+        shell: bash
         run: |
           pyinstaller --onefile --name bdm-tui --clean \
             --hidden-import=textual \
