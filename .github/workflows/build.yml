@@ -10,9 +10,13 @@ on:
         required: false
         default: 'dev'
 
+permissions:
+  contents: write
+
 jobs:
   build:
     strategy:
+      fail-fast: false
       matrix:
         include:
           - os: windows-latest
