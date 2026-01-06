@@ -968,7 +968,7 @@ class SimulationScreen(Screen):
 
         Returns True if level was increased.
         """
-        if (self.config.use_hepta and
+        if ((self.config.use_hepta or self.hepta_sub_progress > 0) and
             self.gear.awakening_level == 7 and
             self.hepta_sub_progress >= HEPTA_SUB_ENHANCEMENTS):
             # Hepta complete - level up to VIII
@@ -976,10 +976,11 @@ class SimulationScreen(Screen):
             self.gear.reset_energy(8)
             self.hepta_sub_progress = 0
             self.hepta_sub_pity = 0
-            self.target_attempts = 0
+            if 8 < self.config.target_level:
+                self.target_attempts = 0
             return True
 
-        if (self.config.use_okta and
+        if ((self.config.use_okta or self.okta_sub_progress > 0) and
             self.gear.awakening_level == 8 and
             self.okta_sub_progress >= OKTA_SUB_ENHANCEMENTS):
             # Okta complete - level up to IX
@@ -987,7 +988,8 @@ class SimulationScreen(Screen):
             self.gear.reset_energy(9)
             self.okta_sub_progress = 0
             self.okta_sub_pity = 0
-            self.target_attempts = 0
+            if 9 < self.config.target_level:
+                self.target_attempts = 0
             return True
 
         return False
