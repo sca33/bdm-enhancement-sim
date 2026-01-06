@@ -47,6 +47,15 @@ jobs:
         shell: bash
         run: |
           pyinstaller --onefile --name bdm-tui --clean \
+            --paths=. \
+            --hidden-import=src \
+            --hidden-import=src.tui \
+            --hidden-import=src.core \
+            --hidden-import=src.config \
+            --hidden-import=src.simulator \
+            --hidden-import=src.screens \
+            --hidden-import=src.item_types \
+            --hidden-import=src.item_types.awakening \
             --hidden-import=textual \
             --hidden-import=textual.app \
             --hidden-import=textual.widgets \
@@ -60,7 +69,8 @@ jobs:
             --hidden-import=rich.markup \
             --collect-all textual \
             --collect-all rich \
-            src/tui.py
+            --collect-submodules src \
+            run_tui.py
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
